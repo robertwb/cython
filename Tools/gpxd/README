@@ -1,0 +1,7 @@
+GOSC 2012 Philip Herron - Cython
+--------------------------------
+
+Pxd generation via the gcc-python-plugin.
+
+Contact: Philip Herron <redbrain@gcc.gnu.org>
+Mentor: Robert Bradshaw <robertwb@gmail.com>
