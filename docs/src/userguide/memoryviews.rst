@@ -171,8 +171,8 @@ As for Numpy, new axes can be introduced by indexing an array with ``None`` ::
 One may mix new axis indexing with all other forms of indexing and slicing.
 See also an example_.
 
-Comparison to the old Numpy buffer support
-==========================================
+Comparison to the old buffer support
+====================================
 
 You will probably prefer memoryviews to the older syntax because:
 
@@ -182,10 +182,8 @@ You will probably prefer memoryviews to the older syntax because:
 
 For example, this is the old syntax equivalent of the ``sum3d`` function above::
 
-    cimport numpy as cnp
-
-    cpdef int old_sum3d(cnp.ndarray[cnp.int_t, ndim=3] arr):
-        cdef int total = 0
+    cpdef int old_sum3d(object[int, ndim=3, mode='strided'] arr):
+        cdef int I, J, K, total = 0
         I = arr.shape[0]
         J = arr.shape[1]
         K = arr.shape[2]
@@ -195,10 +193,11 @@ For example, this is the old syntax equivalent of the ``sum3d`` function above::
                     total += arr[i, j, k]
         return total
 
-Note that we can't use ``nogil`` for the ``ndarray`` version of the function as
-we could for the memoryview version of ``sum3d`` above.  However, even if we
-don't use ``nogil`` with the memoryview, it is significantly faster.  This is a
-output from an IPython session after importing both versions::
+Note that we can't use ``nogil`` for the buffer version of the function as we
+could for the memoryview version of ``sum3d`` above, because buffer objects
+are Python objects.  However, even if we don't use ``nogil`` with the
+memoryview, it is significantly faster.  This is a output from an IPython
+session after importing both versions::
 
     In [2]: import numpy as np
 
@@ -536,6 +535,35 @@ may be assigned directly to a memoryview slice::
 The arrays are indexable and slicable from Python space just like memoryview objects, and have the same
 attributes as memoryview objects.
 
+CPython array module
+====================
+
+An alternative to ``cython.view.array`` is the ``array`` module in the
+Python standard library.  In Python 3, the ``array.array`` type supports
+the buffer interface natively, so memoryviews work on top of it without
+additional setup.
+
+Starting with Cython 0.17, however, it is possible to use these arrays
+as buffer providers also in Python 2.  This is done through explicit
+typing (e.g. a cast or assignment) as follows::
+
+    from cpython cimport array
+
+    def sum_array(array.array arr):  # explicit typing required in Python 2
+        cdef int[:] view = arr
+        cdef int total
+        for i in range(view.shape[0]):
+            total += view[i]
+        return total
+
+Note that the explicit typing also enables support for the old buffer
+syntax for the array type.  Therefore, the following also works::
+
+    from cpython cimport array
+
+    def sum_array(array.array[int] arr):  # using old buffer syntax
+        ...
+
 Coercion to NumPy
 =================
 
@@ -558,6 +586,13 @@ be be checked for being None as well::
 
     def func(double[:] myarray = None):
         print myarray is None
+
+If the function requires real memory views as input, it is therefore best to
+reject None input straight away in the signature, which is supported in Cython
+0.17 and later as follows::
+
+    def func(double[:] myarray not None):
+        ...
 
 Unlike object attributes of extension classes, memoryview slices are not
 initialized to None.
