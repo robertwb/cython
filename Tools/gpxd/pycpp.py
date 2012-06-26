@@ -67,7 +67,7 @@ class PyCppParser:
                     TOKEN = 'ID'
                     self.TOKEN_STATE[TOKEN] = True
                 break
-             elif self.data[self.p] == 'i':
+            elif self.data[self.p] == 'i':
                 string = self.data[self.p]
                 self.parser_pointer_incr ()
                 while self.cppID_valid (self.data[self.p]):
@@ -86,7 +86,7 @@ class PyCppParser:
                     TOKEN = 'ID'
                     self.TOKEN_STATE[TOKEN] = True
                 break
-              elif self.data[self.p] == 'e':
+            elif self.data[self.p] == 'e':
                 string = self.data[self.p]
                 self.parser_pointer_incr ()
                 while self.cppID_valid (self.data[self.p]):
@@ -111,24 +111,51 @@ class PyCppParser:
             else:
                 self.parser_pointer_incr ()
         return TOKEN
+
+    def PyCppLexNextChar (self):
+        c = None
+        if self.p <= len (self.data):
+            c = self.data[self.p]
+            self.parser_pointer_incr ()
+        return c
+
+    def PyCppLexDefintion (self):
+        run = False
+        definition = c = self.PyCppLexNextChar ()
+        while c != None:
+            if c == '\\':
+                run = True
+            if c == '\n':
+                if run == False:
+                    break
+                run = False
+            definition += c
+            c = self.PyCppLexNextChar ()
+        return definition
     
     def PyCppParse (self):
-        MACROS = [ 'define':[], 'include':[], 'ifdef':[], ]
+        MACROS = { 'DEFINE':[], 'INCLUDE':[], 'CONDITIONAL':[] }
         token = self.PyCppLex ()
         while token != 'EOF':
-            if token == 'POUND'
+            if token == 'POUND':
+                token = self.PyCppLex ()
+                if token == 'DEFINE':
+                    definition = self.PyCppLexDefintion ()
+                    MACROS[token].append (definition)
+                # parse include / idefs....
             token = self.PyCppLex ()
+        return MACROS
     
     def parse_macros (self):
         if self._OPEN == True:
             self.data = self.fd.read ()
             self.parser_pointer_reset ()
-            self.PycppParse ()
+            return self.PyCppParse ()
 
 def pycppmain (source):
     print "parsing: ", source
     parser = PyCppParser (source)
-    macros = parser.parse_macros ()
+    macros = macros = parser.parse_macros ()
     parser.parser_close ()
     
 if __name__== "__main__":
