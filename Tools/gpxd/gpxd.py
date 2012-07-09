@@ -1,27 +1,65 @@
-from pycpp import PyCppParser
 import gcc
 import re
-import inspect
-from gccutils import get_src_for_loc, cfg_to_dot, invoke_dot
+from pxdconfig import blacklist, output, headers
+from pycpp import PyCppParser
+from gccutils import cfg_to_dot, invoke_dot, get_src_for_loc, check_isinstance
 
 function_decls = []
 block_decls = []
-sanity_check = [False, False, False]
-headers = [ "t.h" ]
-outpxd = "test.pxd"
+global_decls = None
+sanity_check = [False, False, False, False]
+
+def gpxd_generate_function (fd, decl):
+    fmt = "%s" % decl.type
+    ident = '%s' % decl
+    if re.search ("<.*>", fmt):
+        func = re.sub ("<.*>", ident, fmt)
+        fd.write ('\t%s\n' % func)
+
+def gpxd_generate_type (fd, decl):
+    if ('%s' % type (decl.type)) == "<type 'gcc.RecordType'>":
+        ident = '%s' % decl
+        fd.write ("\tctypedef struct %s:\n" % ident)
+        for f in decl.type.fields:
+            fd.write ("\t\t%s %s\n" % (f.type, f.name))
 
 def gpxd_generate (fdecls, bdecls, out, headers):
     header_dict = { }
-    header_macros = [ ]
     for h in headers:
+        header_dict[h] = { 'FUNCTIONS':[], 'TYPES':[], 'MACROS':[] }
         cpp = PyCppParser (h)
-        header_macros.append (cpp.parse_macros ())
+        header_dict[h]['MACROS'] = cpp.parse_macros ()
         cpp.parser_close ()
-    for h in headers:
         for i in fdecls:
-            loc = i.decl.location
-            print loc
+            loc = ('%r' % i.location)
+            if h in loc:
+                header_data = header_dict[h]
+                header_data['FUNCTIONS'].append (i)
+        for i in bdecls:
+            loc = ('%r' % i.location)
+            if h in loc:
+                header_data = header_dict[h]
+                header_data['TYPES'].append (i)
     fd = open (out, 'w')
+    for i in header_dict:
+        fd.write ("cdef extern from \"%s\":\n" % i)
+        header_data = header_dict[i]
+        funcs = header_data['FUNCTIONS']
+        typesd = header_data['TYPES']
+        macros = header_data['MACROS']
+        for j in typesd:
+            gpxd_generate_type (fd, j)
+        fd.write ("\n")
+        for j in funcs:
+            gpxd_generate_function (fd, j)
+        fd.write ("\n")
+        if len (macros['DEFINE']) > 0:
+            fd.write ("\'\'\'\n")
+            for j in macros['DEFINE']:
+                fd.write (j)
+                fd.write ("\n")
+            fd.write ("\n\'\'\'\n")
+        fd.write ("\n")
     fd.close ()
     
 def gpxd_cleanup_decls (decls, hlist):
@@ -36,22 +74,28 @@ def gpxd_cleanup_decls (decls, hlist):
 
 def gpxd_on_pass_execution(p, fn):
     global function_decls, block_decls, sanity_check
-    if p.name == '*warn_unused_result':
-        function_decls.append (fn)
-        sanity_check[0] = True
-    elif p.name == '*rest_of_compilation':
-        print '#######'
-        print fn
-        print '#######'
-    elif p.name == '*free_lang_data':
-        if not sanity_check[1]:
+    if p.name == '*free_lang_data':
+        if not sanity_check[0]:
             for u in gcc.get_translation_units ():
                 for decl in u.block.vars:
                     block_decls.append (decl)
-            sanity_check[1] = True
+            sanity_check[0] = True
     if sanity_check[0] and sanity_check[1] and not sanity_check[2]:
         sanity_check[2] = True
         block_decls = gpxd_cleanup_decls (block_decls, headers)
-        gpxd_generate (function_decls, block_decls, outpxd, headers)
+        gpxd_generate (function_decls, block_decls, output, headers)
+
+def on_finish_decl(*args):
+    global global_decls
+    global_decls = args
+    decl = args[0]
+    if isinstance (decl, gcc.FunctionDecl):
+        function_decls.append (decl)
+    sanity_check[1] = True
 
 gcc.register_callback(gcc.PLUGIN_PASS_EXECUTION, gpxd_on_pass_execution)
+
+# Hook for GCC 4.7 and later:
+if hasattr(gcc, 'PLUGIN_FINISH_DECL'):
+    gcc.register_callback(gcc.PLUGIN_FINISH_DECL,
+                          on_finish_decl)

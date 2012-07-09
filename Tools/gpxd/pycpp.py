@@ -155,7 +155,7 @@ class PyCppParser:
 def pycppmain (source):
     print "parsing: ", source
     parser = PyCppParser (source)
-    macros = macros = parser.parse_macros ()
+    macros = parser.parse_macros ()
     parser.parser_close ()
     
 if __name__== "__main__":
