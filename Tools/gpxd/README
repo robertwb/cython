@@ -1,7 +1,39 @@
 GOSC 2012 Philip Herron - Cython
 --------------------------------
 
-Pxd generation via the gcc-python-plugin.
+Pxd generation via the gcc-python-plugin. This tool now requires users to use
+GCC 4.7 or greater.
+
+GCC installation - instructions:
+Download GCC
+
+untar
+$ mkdir build
+$ cd build
+$ ../gcc/configure --enable-languages=c,. --enable-plugin <--disable-bootstrap/--enable-gold>
+$ make
+$ make install
+
+GCC-python-plugin
+$ export $(CC)="gcc" # make sure its your new GCC
+$ make
+
+Pxd-generation-tool
+$ cp {gpxd.py, pycpp.py, pxdconfig.py} ~/gcc-python-plugin
+
+# create a dummy C file:
+<include all the headers you want to generate pxd for>
+
+int main (int argc, char **argv)
+{
+  return 0
+}
+
+# edit pxdconfig.h:
+output = "" # name of pxd file output
+headers = [ ] # list of strings of headers you want to generate pxd for
+
+$ gcc -fplugin=./python.so -fplugin-arg-python-script="gpxd.py" -O0 -c t.c
 
 Contact: Philip Herron <redbrain@gcc.gnu.org>
 Mentor: Robert Bradshaw <robertwb@gmail.com>
