@@ -35,5 +35,23 @@ headers = [ ] # list of strings of headers you want to generate pxd for
 
 $ gcc -fplugin=./python.so -fplugin-arg-python-script="gpxd.py" -O0 -c t.c
 
+NOTE:
+
+To generate code for system installed librarys, as in headers outside of your current
+working directory. You must give full path names for example:
+
+#include "/usr/include/gmp-i386.h"
+...
+
+And:
+
+headers = [ '/usr/include/gmp-i386.h',
+	    .... ]
+
+This is because for macro parsing the macro parser requires a proper path to the header
+it doesnt understand system path searching.
+
+There is no working BLACKLIST yet, not quite sure how i want it to work.
+
 Contact: Philip Herron <redbrain@gcc.gnu.org>
 Mentor: Robert Bradshaw <robertwb@gmail.com>
