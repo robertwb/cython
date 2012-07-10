@@ -8,6 +8,7 @@ function_decls = []
 block_decls = []
 global_decls = None
 sanity_check = [False, False, False, False]
+enum_counter = 0
 
 def gpxd_generate_function (fd, decl):
     fmt = "%s" % decl.type
@@ -17,11 +18,34 @@ def gpxd_generate_function (fd, decl):
         fd.write ('\t%s\n' % func)
 
 def gpxd_generate_type (fd, decl):
+    global enum_counter
+    # print "%s" % type (decl.type)
     if ('%s' % type (decl.type)) == "<type 'gcc.RecordType'>":
         ident = '%s' % decl
+        print ident
         fd.write ("\tctypedef struct %s:\n" % ident)
         for f in decl.type.fields:
-            fd.write ("\t\t%s %s\n" % (f.type, f.name))
+            if ('%s' % type (f.type)) == "<type 'gcc.UnionType'>":
+                uid = '%s' % f
+                fd.write ("\t\tcdef union %s:\n" % uid)
+                for x in f.type.fields:
+                    fd.write ("\t\t\t%s %s\n" % (x.type, x.name))
+            else:
+                fd.write ("\t\t%s %s\n" % (f.type, f.name))
+    elif ('%s' % type (decl.type)) == "<type 'gcc.EnumeralType'>":
+        ident = '%s' % decl
+        if 'struct' in ident:
+            enum_counter = 1
+            fd.write ('\tcdef enum %s:\n' % ident)
+        else:
+            fd.write ("\t\t%s = %i\n" % (ident, enum_counter))
+            enum_counter = enum_counter + 1
+    elif ('%s' % type (decl.type)) == "<type 'gcc.UnionType'>":
+        ident = '%s' % decl
+        if ident == "unionunion":
+            fd.write ("\tcdef union %s:\n" % ident)
+            for f in decl.type.fields:
+                fd.write ("\t\t%s %s\n" % (f.type, f.name))
 
 def gpxd_generate (fdecls, bdecls, out, headers):
     header_dict = { }
@@ -88,6 +112,7 @@ def gpxd_on_pass_execution(p, fn):
 def on_finish_decl(*args):
     global global_decls
     global_decls = args
+    # print args
     decl = args[0]
     if isinstance (decl, gcc.FunctionDecl):
         function_decls.append (decl)
