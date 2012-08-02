@@ -17,41 +17,13 @@ $ make install
 GCC-python-plugin
 $ export $(CC)="gcc" # make sure its your new GCC
 $ make
+$ make install
 
-Pxd-generation-tool
-$ cp {gpxd.py, pycpp.py, pxdconfig.py} ~/gcc-python-plugin
+NOTE: if you had to install your own version of GCC when you do sudo make install $(CC) will
+install the python.so to possibly the wrong gcc location. Make sure the correct gcc is in your sudo $(CC)
+and its not just using the system builtin alias to cc to your old gcc
 
-# create a dummy C file:
-<include all the headers you want to generate pxd for>
-
-int main (int argc, char **argv)
-{
-  return 0
-}
-
-# edit pxdconfig.h:
-output = "" # name of pxd file output
-headers = [ ] # list of strings of headers you want to generate pxd for
-
-$ gcc -fplugin=./python.so -fplugin-arg-python-script="gpxd.py" -O0 -c t.c
-
-NOTE:
-
-To generate code for system installed librarys, as in headers outside of your current
-working directory. You must give full path names for example:
-
-#include "/usr/include/gmp-i386.h"
 ...
-
-And:
-
-headers = [ '/usr/include/gmp-i386.h',
-	    .... ]
-
-This is because for macro parsing the macro parser requires a proper path to the header
-it doesnt understand system path searching.
-
-There is no working BLACKLIST yet, not quite sure how i want it to work.
 
 Contact: Philip Herron <redbrain@gcc.gnu.org>
 Mentor: Robert Bradshaw <robertwb@gmail.com>

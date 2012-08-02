@@ -17,9 +17,13 @@
 # Author Philip Herron <redbrain@gcc.gnu.org>
 
 from config import gccpython, output, headers, \
-    keep_generated_files, compiler, lang
+    keep_generated_files, compiler, lang, debug
+from subprocess import Popen, PIPE
 import sys
-import os
+
+def debug (msg):
+    if debug:
+        print "DEBUG: %s" % msg
 
 def fatal (msg):
     print "FATAL: %s" % msg
@@ -42,16 +46,24 @@ def generate_source_file ():
     return fd
 
 def run_gcc_pxd ():
-    cmd = ('gcc -fplugin=%(plugin_path)s -fplugin-arg-python-script=\"./gccpxd.py\" -O0 -c ./%(gen_path)s' % \
+    cmd = 'gcc --version'
+    debug ("executing <%s>" % cmd)
+    pipe = Popen(cmd, shell=True)
+    if pipe.wait () != 0:
+        fatal ("There were some errors running gcc")
+    # now to run the tool
+    cmd = ('gcc -fplugin=%(plugin_path)s -fplugin-arg-python-script=\"./gccpxd.py\" -O0 -c %(gen_path)s' % \
                { "plugin_path" : gccpython, "gen_path" :__GEN_FILE } )
-    print ("DEBUG: <%s>" % cmd)
-    #stream = os.popen (cmd)
+    debug ("executing <%s>" % cmd)
+    pipe = Popen(cmd, shell=True, stdout=PIPE)
+    if pipe.wait () != 0:
+        fatal ("There were some errors running gcc")
 
 def main ():
     fd = generate_source_file ()
     assert fd
-    run_gcc_pxd ()
     fd.close ()
+    run_gcc_pxd ()
     if not keep_generated_files:
         pass # delete the file 
 

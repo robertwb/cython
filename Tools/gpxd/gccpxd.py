@@ -20,8 +20,8 @@ import sys
 import gcc
 import re
 
-from config import output, headers
 from pycpp import PyCppParser
+from config import output, headers
 
 # Hook for GCC 4.7 and later:
 if not hasattr(gcc, 'PLUGIN_FINISH_DECL'):
