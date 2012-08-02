@@ -22,7 +22,15 @@ class BaseType(object):
         return "((%s)%s)" % (self.declaration_code(""), expr_code)
 
     def specialization_name(self):
-        return self.declaration_code("").replace(" ", "__")
+        # This is not entirely robust.
+        safe = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789'
+        all = []
+        for c in self.declaration_code("").replace(" ", "__"):
+            if c in safe:
+                all.append(c)
+            else:
+                all.append('_%x_' % ord(c))
+        return ''.join(all)
 
     def base_declaration_code(self, base_code, entity_code):
         if entity_code:
@@ -136,7 +144,7 @@ class PyrexType(BaseType):
     #  is_enum               boolean     Is a C enum type
     #  is_typedef            boolean     Is a typedef type
     #  is_string             boolean     Is a C char * type
-    #  is_unicode            boolean     Is a UTF-8 encoded C char * type
+    #  is_cpp_string         boolean     Is a C++ std::string type
     #  is_unicode_char       boolean     Is either Py_UCS4 or Py_UNICODE
     #  is_returncode         boolean     Is used only to signal exceptions
     #  is_error              boolean     Is the dummy error type
@@ -187,11 +195,11 @@ class PyrexType(BaseType):
     is_cfunction = 0
     is_struct_or_union = 0
     is_cpp_class = 0
+    is_cpp_string = 0
     is_struct = 0
     is_enum = 0
     is_typedef = 0
     is_string = 0
-    is_unicode = 0
     is_unicode_char = 0
     is_returncode = 0
     is_error = 0
@@ -2284,6 +2292,11 @@ class CPtrType(CPointerBaseType):
     def invalid_value(self):
         return "1"
 
+    def find_cpp_operation_type(self, operator, operand_type=None):
+        if self.base_type.is_cpp_class:
+            return self.base_type.find_cpp_operation_type(operator, operand_type)
+        return None
+
 class CNullPtrType(CPtrType):
 
     is_null_ptr = 1
@@ -2978,6 +2991,9 @@ class CStructOrUnionType(CType):
             return expr_code
         return super(CStructOrUnionType, self).cast_code(expr_code)
 
+
+builtin_cpp_conversions = ("std::string", "std::vector", "std::list", "std::set", "std::map", "std::pair")
+
 class CppClassType(CType):
     #  name          string
     #  cname         string
@@ -3000,6 +3016,75 @@ class CppClassType(CType):
         self.templates = templates
         self.template_type = template_type
         self.specializations = {}
+        self.is_cpp_string = cname == 'std::string'
+
+    def use_conversion_utility(self, from_or_to):
+        pass
+    
+    def create_from_py_utility_code(self, env):
+        if self.from_py_function is not None:
+            return True
+        if self.cname in builtin_cpp_conversions:
+            X = "XYZABC"
+            tags = []
+            declarations = ["cdef extern from *:"]
+            for ix, T in enumerate(self.templates or []):
+                if T.is_pyobject or not T.create_from_py_utility_code(env):
+                    return False
+                tags.append(T.specialization_name())
+                if T.exception_value is not None:
+                    except_clause = T.exception_value
+                    if T.exception_check:
+                        except_clause = "? %s" % except_clause
+                    declarations.append(
+                        "    ctypedef %s %s '%s'" % (
+                             T.declaration_code("", for_display=True), X[ix], T.declaration_code("")))
+                else:
+                    except_clause = "*"
+                    declarations.append(
+                        "    ctypedef struct %s '%s':\n        pass" % (
+                             X[ix], T.declaration_code("")))
+                declarations.append(
+                    "    cdef %s %s_from_py '%s' (object) except %s" % (
+                         X[ix], X[ix], T.from_py_function, except_clause))
+            cls = self.cname[5:]
+            cname = '__pyx_convert_%s_from_py_%s' % (cls, '____'.join(tags))
+            context = {
+                'template_type_declarations': '\n'.join(declarations),
+                'cname': cname
+            }
+            from UtilityCode import CythonUtilityCode
+            env.use_utility_code(CythonUtilityCode.load(cls + ".from_py", "CppConvert.pyx", context=context))
+            self.from_py_function = cname
+            return True
+    
+    def create_to_py_utility_code(self, env):
+        if self.to_py_function is not None:
+            return True
+        if self.cname in builtin_cpp_conversions:
+            X = "XYZABC"
+            tags = []
+            declarations = ["cdef extern from *:"]
+            for ix, T in enumerate(self.templates or []):
+                if not T.create_to_py_utility_code(env):
+                    return False
+                tags.append(T.specialization_name())
+                declarations.append(
+                    "    ctypedef struct %s '%s':\n        pass" % (
+                         X[ix], T.declaration_code("")))
+                declarations.append(
+                    "    cdef object %s_to_py '%s' (%s)" % (
+                         X[ix], T.to_py_function, X[ix]))
+            cls = self.cname[5:]
+            cname = "__pyx_convert_%s_to_py_%s" % (cls, "____".join(tags))
+            context = {
+                'template_type_declarations': '\n'.join(declarations),
+                'cname': cname
+            }
+            from UtilityCode import CythonUtilityCode
+            env.use_utility_code(CythonUtilityCode.load(cls + ".to_py", "CppConvert.pyx", context=context))
+            self.to_py_function = cname
+            return True
 
     def specialize_here(self, pos, template_values = None):
         if self.templates is None:
@@ -3035,7 +3120,11 @@ class CppClassType(CType):
         if self.templates:
             template_strings = [param.declaration_code('', for_display, None, pyrex)
                                 for param in self.templates]
-            templates = "<%s>" % ",".join(template_strings)
+            if for_display:
+                brackets = "[%s]"
+            else:
+                brackets = "<%s>"
+            templates = brackets % ",".join(template_strings)
             if templates[-2:] == ">>":
                 templates = templates[:-2] + "> >"
         else:
@@ -3079,6 +3168,19 @@ class CppClassType(CType):
 
     def attributes_known(self):
         return self.scope is not None
+
+    def find_cpp_operation_type(self, operator, operand_type=None):
+        operands = [self]
+        if operand_type is not None:
+            operands.append(operand_type)
+        # pos == None => no errors
+        operator_entry = self.scope.lookup_operator_for_types(None, operator, operands)
+        if not operator_entry:
+            return None
+        func_type = operator_entry.type
+        if func_type.is_ptr:
+            func_type = func_type.base_type
+        return func_type.return_type
 
 
 class TemplatePlaceholderType(CType):
@@ -3715,7 +3817,11 @@ static CYTHON_INLINE Py_ssize_t __Pyx_PyIndex_AsSsize_t(PyObject*);
 static CYTHON_INLINE PyObject * __Pyx_PyInt_FromSize_t(size_t);
 static CYTHON_INLINE size_t __Pyx_PyInt_AsSize_t(PyObject*);
 
+#if CYTHON_COMPILING_IN_CPYTHON
 #define __pyx_PyFloat_AsDouble(x) (PyFloat_CheckExact(x) ? PyFloat_AS_DOUBLE(x) : PyFloat_AsDouble(x))
+#else
+#define __pyx_PyFloat_AsDouble(x) PyFloat_AsDouble(x)
+#endif
 #define __pyx_PyFloat_AsFloat(x) ((float) __pyx_PyFloat_AsDouble(x))
 """ + type_conversion_predeclarations
 

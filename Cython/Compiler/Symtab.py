@@ -571,7 +571,7 @@ class Scope(object):
         if type.is_cpp_class and visibility != 'extern':
             constructor = type.scope.lookup(u'<init>')
             if constructor is not None and PyrexTypes.best_match([], constructor.all_alternatives()) is None:
-                error(pos, "C++ class must have a default constructor to be stack allocated")
+                error(pos, "C++ class must have a no-arg constructor to be stack allocated")
         entry = self.declare(name, cname, type, pos, visibility)
         entry.is_variable = 1
         if in_pxd and visibility != 'extern':
@@ -757,6 +757,13 @@ class Scope(object):
         if function is None:
             return None
         return PyrexTypes.best_match(operands, function.all_alternatives())
+
+    def lookup_operator_for_types(self, pos, operator, types):
+        from Nodes import Node
+        class FakeOperand(Node):
+            pass
+        operands = [FakeOperand(pos, type=type) for type in types]
+        return self.lookup_operator(operator, operands)
 
     def use_utility_code(self, new_code):
         self.global_scope().use_utility_code(new_code)
@@ -1770,7 +1777,11 @@ class CClassScope(ClassScope):
                 if visibility == 'private':
                     cname = c_safe_identifier(cname)
             if type.is_cpp_class and visibility != 'extern':
-                error(pos, "C++ classes not allowed as members of an extension type, use a pointer or reference instead")
+                constructor = type.scope.lookup(u'<init>')
+                if constructor is not None and \
+                        PyrexTypes.best_match([], constructor.all_alternatives()) is None:
+                    error(pos, "C++ class must have a no-arg constructor to be a member of an extension type; use a pointer instead")
+                self.use_utility_code(Code.UtilityCode("#include <new>"))
             entry = self.declare(name, cname, type, pos, visibility)
             entry.is_variable = 1
             self.var_entries.append(entry)

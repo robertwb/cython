@@ -2297,7 +2297,7 @@ supported_overloaded_operators = set([
     '+', '-', '*', '/', '%',
     '++', '--', '~', '|', '&', '^', '<<', '>>', ',',
     '==', '!=', '>=', '>', '<=', '<',
-    '[]', '()',
+    '[]', '()', '!',
 ])
 
 def p_c_simple_declarator(s, ctx, empty, is_type, cmethod_flag,
@@ -2354,11 +2354,11 @@ def p_c_simple_declarator(s, ctx, empty, is_type, cmethod_flag,
                 elif op == '[':
                     s.expect(']')
                     op = '[]'
-                if op in ['-', '+', '|', '&'] and s.sy == op:
-                    op = op*2
+                elif op in ('-', '+', '|', '&') and s.sy == op:
+                    op *= 2       # ++, --, ...
                     s.next()
-                if s.sy == '=':
-                    op += s.sy
+                elif s.sy == '=':
+                    op += s.sy    # +=, -=, ...
                     s.next()
                 if op not in supported_overloaded_operators:
                     s.error("Overloading operator '%s' not yet supported." % op)
@@ -2736,6 +2736,7 @@ def p_c_func_or_var_declaration(s, pos, ctx):
             declarators = declarators,
             in_pxd = ctx.level in ('module_pxd', 'c_class_pxd'),
             api = ctx.api,
+            modifiers = modifiers,
             overridable = ctx.overridable)
     return result
 

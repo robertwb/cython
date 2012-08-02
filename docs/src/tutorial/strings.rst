@@ -27,12 +27,12 @@ therefore only work correctly for C strings that do not contain null
 bytes.
 
 Besides not working for null bytes, the above is also very inefficient
-for long strings, since Cython has to call ``strlen()`` on the C string
-first to find out the length by counting the bytes up to the terminating
-null byte.  In many cases, the user code will know the length already,
-e.g. because a C function returned it.  In this case, it is much more
-efficient to tell Cython the exact number of bytes by slicing the C
-string::
+for long strings, since Cython has to call :c:func:`strlen()` on the
+C string first to find out the length by counting the bytes up to the
+terminating null byte.  In many cases, the user code will know the
+length already, e.g. because a C function returned it.  In this case,
+it is much more efficient to tell Cython the exact number of bytes by
+slicing the C string::
 
     cdef char* c_string = NULL
     cdef Py_ssize_t length = 0
@@ -44,12 +44,14 @@ string::
 
 Here, no additional byte counting is required and ``length`` bytes from
 the ``c_string`` will be copied into the Python bytes object, including
-any null bytes.
+any null bytes.  Keep in mind that the slice indices are assumed to be
+accurate in this case and no bounds checking is done, so incorrect
+slice indices will lead to data corruption and crashes.
 
 Note that the creation of the Python bytes string can fail with an
-exception, e.g. due to insufficient memory.  If you need to ``free()``
-the string after the conversion, you should wrap the assignment in a
-try-finally construct::
+exception, e.g. due to insufficient memory.  If you need to
+:c:func:`free()` the string after the conversion, you should wrap
+the assignment in a try-finally construct::
 
     cimport stdlib
     cdef bytes py_string
@@ -59,8 +61,8 @@ try-finally construct::
     finally:
         stdlib.free(c_string)
 
-To convert the byte string back into a C ``char*``, use the opposite
-assignment::
+To convert the byte string back into a C :c:type:`char*`, use the
+opposite assignment::
 
     cdef char* other_c_string = py_string
 
@@ -68,12 +70,55 @@ This is a very fast operation after which ``other_c_string`` points to
 the byte string buffer of the Python string itself.  It is tied to the
 life time of the Python string.  When the Python string is garbage
 collected, the pointer becomes invalid.  It is therefore important to
-keep a reference to the Python string as long as the ``char*`` is in
-use.  Often enough, this only spans the call to a C function that
+keep a reference to the Python string as long as the :c:type:`char*`
+is in use.  Often enough, this only spans the call to a C function that
 receives the pointer as parameter.  Special care must be taken,
 however, when the C function stores the pointer for later use.  Apart
 from keeping a Python reference to the string object, no manual memory
 management is required.
+
+Dealing with "const"
+--------------------
+
+Many C libraries use the ``const`` modifier in their API to declare
+that they will not modify a string, or to require that users must
+not modify a string they return, for example:
+
+.. code-block:: c
+
+    typedef const char specialChar;
+    int process_string(const char* s);
+    const unsigned char* look_up_cached_string(const unsigned char* key);
+
+Cython does not currently have support for the ``const`` modifier in
+the language, but it allows users to make the necessary declarations
+at a textual level.
+
+In general, for arguments of external C functions, the ``const``
+modifier does not matter and can be left out in the Cython
+declaration (e.g. in a .pxd file).  The C compiler will still do
+the right thing, even if you declare this to Cython::
+
+    cdef extern from "someheader.h":
+        int process_string(char* s)   # note: looses API information!
+
+However, in most other situations, such as for return values and
+variables that use specifically typedef-ed API types, it does matter
+and the C compiler will emit a warning if used incorrectly.  To help
+with this, you can use the type definitions in the ``libc.string``
+module, e.g.::
+
+    from libc.string cimport const_char, const_uchar
+
+    cdef extern from "someheader.h":
+        ctypedef const_char specialChar
+        int process_string(const_char* s)
+        const_uchar* look_up_cached_string(const_uchar* key)
+
+Note: even if the API only uses ``const`` for function arguments,
+it is still preferable to properly declare them using the
+:c:type:`const_char` types in order to simplify adaptations, e.g.
+if Cython ever gains language support for ``const``.
 
 Decoding bytes to text
 ----------------------
@@ -95,7 +140,7 @@ contains no null bytes::
     cdef char* some_c_string = c_call_returning_a_c_string()
     ustring = some_c_string.decode('UTF-8')
 
-And for strings where the length is known::
+And, more efficiently, for strings where the length is known::
 
     cdef char* c_string = NULL
     cdef Py_ssize_t length = 0
@@ -108,6 +153,15 @@ And for strings where the length is known::
 The same should be used when the string contains null bytes, e.g. when
 it uses an encoding like UCS-4, where each character is encoded in four
 bytes most of which tend to be 0.
+
+Again, no bounds checking is done if slice indices are provided, so
+incorrect indices lead to data corruption and crashes.  However, using
+negative indices is possible since Cython 0.17 and will inject a call
+to :c:func:`strlen()` in order to determine the string length.
+Obviously, this only works for 0-terminated strings without internal
+null bytes.  Text encoded in UTF-8 or one of the ISO-8859 encodings is
+usually a good candidate.  If in doubt, it's better to pass indices
+that are 'obviously' correct than to rely on the data to be as expected.
 
 It is common practice to wrap string conversions (and non-trivial type
 conversions in general) in dedicated functions, as this needs to be
@@ -140,9 +194,9 @@ use separate conversion functions for different types of strings.
 Encoding text to bytes
 ----------------------
 
-The reverse way, converting a Python unicode string to a C ``char*``,
-is pretty efficient by itself, assuming that what you actually want is
-a memory managed byte string::
+The reverse way, converting a Python unicode string to a C
+:c:type:`char*`, is pretty efficient by itself, assuming that what
+you actually want is a memory managed byte string::
 
     py_byte_string = py_unicode_string.encode('UTF-8')
     cdef char* c_string = py_byte_string
@@ -159,6 +213,49 @@ temporary string result that will be garbage collected after the
 assignment.  Later access to the invalidated pointer will read invalid
 memory and likely result in a segfault.  Cython will therefore refuse
 to compile this code.
+
+C++ strings
+-----------
+
+When wrapping a C++ library, strings will usually come in the form of
+the :c:type:`std::string` class.  As with C strings, Python byte strings
+automatically coerce from and to C++ strings::
+
+    # distutils: language = c++
+
+    from libcpp.string cimport string
+
+    cdef string s = py_bytes_object
+    try:
+        s.append('abc')
+        py_bytes_object = s
+    finally:
+        del s
+
+The memory management situation is different than in C because the
+creation of a C++ string makes an independent copy of the string
+buffer which the string object then owns.  It is therefore possible
+to convert temporarily created Python objects directly into C++
+strings.  A common way to make use of this is when encoding a Python
+unicode string into a C++ string::
+
+    cdef string cpp_string = py_unicode_string.encode('UTF-8')
+
+Note that this involves a bit of overhead because it first encodes
+the Unicode string into a temporarily created Python bytes object
+and then copies its buffer into a new C++ string.
+
+For the other direction, efficient decoding support is available
+in Cython 0.17 and later::
+
+    cdef string s = string('abcdefg')
+
+    ustring1 = s.decode('UTF-8')
+    ustring2 = s[2:-2].decode('UTF-8')
+
+For C++ strings, decoding slices will always take the proper length
+of the string into account and apply Python slicing semantics (e.g.
+return empty strings for out-of-bounds indices).
 
 Source code encoding
 --------------------
@@ -216,24 +313,25 @@ unicode string literals, just like Python 3.
 Single bytes and characters
 ---------------------------
 
-The Python C-API uses the normal C ``char`` type to represent a byte
-value, but it has two special integer types for a Unicode code point
-value, i.e. a single Unicode character: ``Py_UNICODE`` and
-``Py_UCS4``.  Since version 0.13, Cython supports the first natively,
-support for ``Py_UCS4`` is new in Cython 0.15.  ``Py_UNICODE`` is
-either defined as an unsigned 2-byte or 4-byte integer, or as
-``wchar_t``, depending on the platform.  The exact type is a compile
-time option in the build of the CPython interpreter and extension
-modules inherit this definition at C compile time.  The advantage of
-``Py_UCS4`` is that it is guaranteed to be large enough for any
-Unicode code point value, regardless of the platform.  It is defined
-as a 32bit unsigned int or long.
+The Python C-API uses the normal C :c:type:`char` type to represent
+a byte value, but it has two special integer types for a Unicode code
+point value, i.e. a single Unicode character: :c:type:`Py_UNICODE`
+and :c:type:`Py_UCS4``.  Since version 0.13, Cython supports the
+first natively, support for :c:type:`Py_UCS4` is new in Cython 0.15.
+:c:type:`Py_UNICODE` is either defined as an unsigned 2-byte or
+4-byte integer, or as :c:type:`wchar_t`, depending on the platform.
+The exact type is a compile time option in the build of the CPython
+interpreter and extension modules inherit this definition at C
+compile time.  The advantage of :c:type:`Py_UCS4` is that it is
+guaranteed to be large enough for any Unicode code point value,
+regardless of the platform.  It is defined as a 32bit unsigned int
+or long.
 
-In Cython, the ``char`` type behaves differently from the
-``Py_UNICODE`` and ``Py_UCS4`` types when coercing to Python objects.
-Similar to the behaviour of the bytes type in Python 3, the ``char``
-type coerces to a Python integer value by default, so that the
-following prints 65 and not ``A``::
+In Cython, the :c:type:`char` type behaves differently from the
+:c:type:`Py_UNICODE` and :c:type:`Py_UCS4` types when coercing
+to Python objects.  Similar to the behaviour of the bytes type in
+Python 3, the :c:type:`char` type coerces to a Python integer
+value by default, so that the following prints 65 and not ``A``::
 
     # -*- coding: ASCII -*-
 
@@ -248,18 +346,18 @@ explicitly, and the following will print ``A`` (or ``b'A'`` in Python
     print( <bytes>char_val )
 
 The explicit coercion works for any C integer type.  Values outside of
-the range of a ``char`` or ``unsigned char`` will raise an
+the range of a :c:type:`char` or :c:type:`unsigned char` will raise an
 ``OverflowError`` at runtime.  Coercion will also happen automatically
 when assigning to a typed variable, e.g.::
 
     cdef bytes py_byte_string
     py_byte_string = char_val
 
-On the other hand, the ``Py_UNICODE`` and ``Py_UCS4`` types are rarely
-used outside of the context of a Python unicode string, so their
-default behaviour is to coerce to a Python unicode object.  The
+On the other hand, the :c:type:`Py_UNICODE` and :c:type:`Py_UCS4`
+types are rarely used outside of the context of a Python unicode string,
+so their default behaviour is to coerce to a Python unicode object.  The
 following will therefore print the character ``A``, as would the same
-code with the ``Py_UNICODE`` type::
+code with the :c:type:`Py_UNICODE` type::
 
     cdef Py_UCS4 uchar_val = u'A'
     assert uchar_val == 65 # character point value of u'A'
@@ -280,17 +378,18 @@ can have is 1114111 (``0x10FFFF``).  On platforms with 32bit or more,
 Narrow Unicode builds
 ----------------------
 
-In narrow Unicode builds of CPython, i.e. builds where
-``sys.maxunicode`` is 65535 (such as all Windows builds, as opposed to
-1114111 in wide builds), it is still possible to use Unicode character
-code points that do not fit into the 16 bit wide ``Py_UNICODE`` type.
-For example, such a CPython build will accept the unicode literal
-``u'\U00012345'``.  However, the underlying system level encoding
-leaks into Python space in this case, so that the length of this
-literal becomes 2 instead of 1.  This also shows when iterating over
-it or when indexing into it.  The visible substrings are ``u'\uD808'``
-and ``u'\uDF45'`` in this example.  They form a so-called surrogate
-pair that represents the above character.
+In narrow Unicode builds of CPython before version 3.3, i.e. builds
+where ``sys.maxunicode`` is 65535 (such as all Windows builds, as
+opposed to 1114111 in wide builds), it is still possible to use
+Unicode character code points that do not fit into the 16 bit wide
+:c:type:`Py_UNICODE` type.  For example, such a CPython build will
+accept the unicode literal ``u'\U00012345'``.  However, the
+underlying system level encoding leaks into Python space in this
+case, so that the length of this literal becomes 2 instead of 1.
+This also shows when iterating over it or when indexing into it.
+The visible substrings are ``u'\uD808'`` and ``u'\uDF45'`` in this
+example.  They form a so-called surrogate pair that represents the
+above character.
 
 For more information on this topic, it is worth reading the `Wikipedia
 article about the UTF-16 encoding`_.
@@ -306,7 +405,7 @@ decoding and printing will work as expected, so that the above literal
 turns into exactly the same byte sequence on both narrow and wide
 Unicode platforms.
 
-However, programmers should be aware that a single ``Py_UNICODE``
+However, programmers should be aware that a single :c:type:`Py_UNICODE`
 value (or single 'character' unicode string in CPython) may not be
 enough to represent a complete Unicode character on narrow platforms.
 For example, if an independent search for ``u'\uD808'`` and
@@ -320,7 +419,7 @@ pair is always identifiable in a sequence of code points.
 
 As of version 0.15, Cython has extended support for surrogate pairs so
 that you can safely use an ``in`` test to search character values from
-the full ``Py_UCS4`` range even on narrow platforms::
+the full :c:type:`Py_UCS4` range even on narrow platforms::
 
     cdef Py_UCS4 uchar = 0x12345
     print( uchar in some_unicode_string )
@@ -332,13 +431,30 @@ platforms::
     cdef Py_UCS4 uchar = u'\U00012345'
     assert uchar == 0x12345
 
+In CPython 3.3 and later, the :c:type:`Py_UNICODE` type is an alias
+for the system specific :c:type:`wchar_t` type and is no longer tied
+to the internal representation of the Unicode string.  Instead, any
+Unicode character can be represented on all platforms without
+resorting to surrogate pairs.  This implies that narrow builds no
+longer exist from that version on, regardless of the size of
+:c:type:`Py_UNICODE`.  See
+`PEP 393 <http://www.python.org/dev/peps/pep-0393/>`_  for details.
+
+Cython 0.16 and later handles this change internally and does the right
+thing also for single character values as long as either type inference
+is applied to untyped variables or the portable :c:type:`Py_UCS4` type
+is explicitly used in the source code instead of the platform specific
+:c:type:`Py_UNICODE` type.  Optimisations that Cython applies to the
+Python unicode type will automatically adapt to PEP 393 at C compile
+time, as usual.
 
 Iteration
 ---------
 
-Cython 0.13 supports efficient iteration over ``char*``, bytes and
-unicode strings, as long as the loop variable is appropriately typed.
-So the following will generate the expected C code::
+Cython 0.13 supports efficient iteration over :c:type:`char*`,
+bytes and unicode strings, as long as the loop variable is
+appropriately typed. So the following will generate the expected
+C code::
 
     cdef char* c_string = ...
 
@@ -355,7 +471,7 @@ The same applies to bytes objects::
         if c == 'A': ...
 
 For unicode objects, Cython will automatically infer the type of the
-loop variable as ``Py_UCS4``::
+loop variable as :c:type:`Py_UCS4`::
 
     cdef unicode ustring = ...
 

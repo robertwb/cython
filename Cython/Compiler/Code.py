@@ -40,11 +40,20 @@ non_portable_builtins_map = {
     'BaseException' : ('PY_VERSION_HEX < 0x02050000', 'Exception'),
     }
 
+basicsize_builtins_map = {
+    # builtins whose type has a different tp_basicsize than sizeof(...)
+    'PyTypeObject' : 'PyHeapTypeObject',
+    }
+
 uncachable_builtins = [
     # builtin names that cannot be cached because they may or may not
     # be available at import time
     'WindowsError',
     ]
+
+modifier_output_mapper = {
+    'inline': 'CYTHON_INLINE'
+}.get
 
 def get_utility_dir():
     # make this a function and not global variables:
@@ -392,6 +401,8 @@ def sub_tempita(s, context, file=None, name=None):
 
 class TempitaUtilityCode(UtilityCode):
     def __init__(self, name=None, proto=None, impl=None, file=None, context=None, **kwargs):
+        if context is None:
+            context = {}
         proto = sub_tempita(proto, context, file, name)
         impl = sub_tempita(impl, context, file, name)
         super(TempitaUtilityCode, self).__init__(
@@ -1563,6 +1574,11 @@ class CCodeWriter(object):
             return 'unlikely(%s)' % cond
         else:
             return cond
+
+    def build_function_modifiers(self, modifiers, mapper=modifier_output_mapper):
+        if not modifiers:
+            return ''
+        return '%s ' % ' '.join([mapper(m,m) for m in modifiers])
 
     # Python objects and reference counting
 

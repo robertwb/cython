@@ -127,26 +127,27 @@ yields::
     6
     8
 
-.. note:: see :ref:`automatic-range-conversion`
-       
+.. note:: Usage of this syntax is discouraged as it is redundant with the
+          normal Python :keyword:`for` loop.
+          See :ref:`automatic-range-conversion`.
 
 Boolean int type (e.g. it acts like a c int, but coerces to/from python as a boolean)
 ======================================================================================
 
 In C, ints are used for truth values. In python, any object can be used as a
-truth value (using the :meth:`__nonzero__` method, but the canonical choices
-are the two boolean objects ``True`` and ``False``. The :keyword:`bint` of
-"boolean int" object is compiled to a C int, but get coerced to and from
-Cython as booleans. The return type of comparisons and several builtins is a
-:ctype:`bint` as well. This allows one to avoid having to wrap things in
+truth value (using the :meth:`__nonzero__` method), but the canonical choices
+are the two boolean objects ``True`` and ``False``. The :c:type:`bint` (for
+"boolean int") type is compiled to a C int, but coerces to and from
+Python as booleans. The return type of comparisons and several builtins is a
+:c:type:`bint` as well. This reduces the need for wrapping things in
 :func:`bool()`. For example, one can write::
 
     def is_equal(x):
         return x == y
 
 which would return ``1`` or ``0`` in Pyrex, but returns ``True`` or ``False`` in
-python. One can declare variables and return values for functions to be of the
-:ctype:`bint` type.  For example::
+Cython. One can declare variables and return values for functions to be of the
+:c:type:`bint` type.  For example::
 
     cdef int i = x
     cdef bint b = x
@@ -236,10 +237,10 @@ In Cython ``<type>x`` will try and do a coercion (as would happen on assignment 
 It does not stop one from casting where there is no conversion (though it will
 emit a warning). If one really wants the address, cast to a ``void *`` first.
 
-As in Pyrex ``<MyExtensionType>x`` will cast ``x`` to type :ctype:`MyExtensionType` without any
+As in Pyrex ``<MyExtensionType>x`` will cast ``x`` to type :c:type:`MyExtensionType` without any
 type checking. Cython supports the syntax ``<MyExtensionType?>`` to do the cast
 with type checking (i.e. it will throw an error if ``x`` is not a (subclass of)
-:ctype:`MyExtensionType`. 
+:c:type:`MyExtensionType`.
 
 Optional arguments in cdef/cpdef functions
 ============================================

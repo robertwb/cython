@@ -32,12 +32,17 @@ main new features of Cython v0.13 regarding C++ support:
 
 Procedure Overview
 -------------------
-The general procedure for wrapping a C++ file can now be described as follow:
+The general procedure for wrapping a C++ file can now be described as follows:
 
-* Specify C++ language in :file:`setup.py` script
-* Create ``cdef extern from`` blocks with the optional namespace (if exists) and the namespace name as string
-* Declare classes as ``cdef cppclass`` blocks
-* Declare public attributes (variables, methods and constructors) 
+* Specify C++ language in :file:`setup.py` script or locally in a source file.
+* Create one or more .pxd files with ``cdef extern from`` blocks and
+  (if existing) the C++ namespace name.  In these blocks,
+
+  * declare classes as ``cdef cppclass`` blocks
+  * declare public names (variables, methods and constructors)
+
+* Write an extension modules, ``cimport`` from the .pxd file and use
+  the declarations.
 
 A simple Tutorial
 ==================
@@ -180,16 +185,22 @@ class name from Rectangle.h and adjust for Cython syntax, so now it becomes::
 Add public attributes
 ^^^^^^^^^^^^^^^^^^^^^^
 
-We now need to declare the attributes for use on Cython::
+We now need to declare the attributes and methods for use on Cython::
 
     cdef extern from "Rectangle.h" namespace "shapes":
         cdef cppclass Rectangle:
-            Rectangle(int, int, int, int)
+            Rectangle(int, int, int, int) except +
             int x0, y0, x1, y1
             int getLength()
             int getHeight()
             int getArea()
             void move(int, int)
+
+Note that the constructor is declared as "except +".  If the C++ code or
+the initial memory allocation raises an exception due to a failure, this
+will let Cython safely raise an appropriate Python exception instead
+(see below).  Without this declaration, C++ exceptions originating from
+the constructor will not be handled by Cython.
 
 Declare a var with the wrapped C++ class
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -332,9 +343,9 @@ syntax as C++. Cython provides functions replacing these operators in
 a special module ``cython.operator``. The functions provided are:
 
 * ``cython.operator.dereference`` for dereferencing. ``dereference(foo)``
-  will produce the C++ code ``*foo``
+  will produce the C++ code ``*(foo)``
 * ``cython.operator.preincrement`` for pre-incrementation. ``preincrement(foo)``
-  will produce the C++ code ``++foo``
+  will produce the C++ code ``++(foo)``
 * ...
 
 These functions need to be cimported. Of course, one can use a
@@ -398,6 +409,45 @@ For example::
         
 The pxd files in ``/Cython/Includes/libcpp`` also work as good examples on
 how to declare C++ classes.
+
+Since Cython 0.17, the STL containers coerce from and to the
+corresponding Python builtin types.  The conversion is triggered
+either by an assignment to a typed variable (including typed function
+arguments) or by an explicit cast, e.g.::
+
+    from libcpp.string cimport string
+    from libcpp.vector cimport vector
+
+    cdef string s = py_bytes_object
+    print(s)
+    cpp_string = <string> py_unicode_object.encode('utf-8')
+
+    cdef vector[int] vect = xrange(1, 10, 2)
+    print(vect)              # [1, 3, 5, 7, 9]
+
+    cdef vector[string] cpp_strings = b'ab cd ef gh'.split()
+    print(cpp_strings.get(1))   # b'cd'
+
+The following coercions are available:
+
++------------------+----------------+-----------------+
+| Python type =>   | *C++ type*     | => Python type  |
++==================+================+=================+
+| bytes            | std::string    | bytes           |
++------------------+----------------+-----------------+
+| iterable         | std::vector    | list            |
++------------------+----------------+-----------------+
+| iterable         | std::list      | list            |
++------------------+----------------+-----------------+
+| iterable         | std::set       | set             |
++------------------+----------------+-----------------+
+| iterable (len 2) | std::pair      | tuple (len 2)   |
++------------------+----------------+-----------------+
+
+All conversions create a new container and copy the data into it.
+The items in the containers are converted to a corresponding type
+automatically, which includes recursively converting containers
+inside of containers, e.g. a C++ vector of maps of strings.
 
 Exceptions
 -----------
@@ -483,8 +533,8 @@ Access to C-only functions
 ---------------------------
 
 Whenever generating C++ code, Cython generates declarations of and calls
-to functions assuming these functions are C++ (ie, not declared as extern "C"
-{...} . This is ok if the C functions have C++ entry points, but if they're C
+to functions assuming these functions are C++ (ie, not declared as ``extern "C"
+{...}``. This is ok if the C functions have C++ entry points, but if they're C
 only, you will hit a roadblock. If you have a C++ Cython module needing
 to make calls to pure-C functions, you will need to write a small C++ shim
 module which:
@@ -492,25 +542,6 @@ module which:
 * includes the needed C headers in an extern "C" block
 * contains minimal forwarding functions in C++, each of which calls the
   respective pure-C function 
-
-Inherited C++ methods
-----------------------
-
-If you have a class ``Foo`` with a child class ``Bar``, and ``Foo`` has a
-method :meth:`fred`, then you'll have to cast to access this method from
-``Bar`` objects.
-For example::
-
-    cdef class MyClass:
-        Bar *b
-        ...
-        def myfunc(self):
-            ...
-            b.fred()   # wrong, won't work
-            (<Foo *>(self.b)).fred() # should work, Cython now thinks it's a 'Foo'
-
-It might take some experimenting by others (you?) to find the most elegant
-ways of handling this issue.
 
 Declaring/Using References
 ---------------------------

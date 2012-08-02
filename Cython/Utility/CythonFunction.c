@@ -59,6 +59,7 @@ static CYTHON_INLINE void __Pyx_CyFunction_SetDefaultsTuple(PyObject *m,
 static int __Pyx_CyFunction_init(void);
 
 //////////////////// CythonFunction ////////////////////
+//@substitute: naming
 
 static PyObject *
 __Pyx_CyFunction_get_doc(__pyx_CyFunctionObject *op, CYTHON_UNUSED void *closure)
@@ -181,7 +182,7 @@ __Pyx_CyFunction_set_dict(__pyx_CyFunctionObject *op, PyObject *value)
 static PyObject *
 __Pyx_CyFunction_get_globals(CYTHON_UNUSED __pyx_CyFunctionObject *op)
 {
-    PyObject* dict = PyModule_GetDict({{module_cname}});
+    PyObject* dict = PyModule_GetDict(${module_cname});
     Py_XINCREF(dict);
     return dict;
 }
@@ -438,7 +439,7 @@ static PyObject * __Pyx_CyFunction_Call(PyObject *func, PyObject *arg, PyObject 
     return NULL;
 }
 #else
-static CYTHON_INLINE PyObject * __Pyx_CyFunction_Call(PyObject *func, PyObject *arg, PyObject *kw) {
+static PyObject * __Pyx_CyFunction_Call(PyObject *func, PyObject *arg, PyObject *kw) {
 	return PyCFunction_Call(func, arg, kw);
 }
 #endif
@@ -501,6 +502,10 @@ static PyTypeObject __pyx_CyFunctionType_type = {
 
 
 static int __Pyx_CyFunction_init(void) {
+#if !CYTHON_COMPILING_IN_PYPY
+    // avoid a useless level of call indirection
+    __pyx_CyFunctionType_type.tp_call = PyCFunction_Call;
+#endif
     if (PyType_Ready(&__pyx_CyFunctionType_type) < 0)
         return -1;
     __pyx_CyFunctionType = &__pyx_CyFunctionType_type;

@@ -3,6 +3,10 @@
 
 #include <string.h>
 
+//////////////////// IncludeCppStringH.proto ////////////////////
+
+#include <string>
+
 //////////////////// BytesContains.proto ////////////////////
 
 static CYTHON_INLINE int __Pyx_BytesContains(PyObject* bytes, char character); /*proto*/
@@ -177,4 +181,123 @@ static CYTHON_INLINE int __Pyx_PyBytes_Equals(PyObject* s1, PyObject* s2, int eq
         return result;
     }
 #endif
+}
+
+//////////////////// GetItemIntUnicode.proto ////////////////////
+
+#define __Pyx_GetItemInt_Unicode(o, i, size, to_py_func) (((size) <= sizeof(Py_ssize_t)) ? \
+                                               __Pyx_GetItemInt_Unicode_Fast(o, i) : \
+                                               __Pyx_GetItemInt_Unicode_Generic(o, to_py_func(i)))
+
+static CYTHON_INLINE Py_UCS4 __Pyx_GetItemInt_Unicode_Fast(PyObject* ustring, Py_ssize_t i);
+static CYTHON_INLINE Py_UCS4 __Pyx_GetItemInt_Unicode_Generic(PyObject* ustring, PyObject* j);
+
+//////////////////// GetItemIntUnicode ////////////////////
+
+static CYTHON_INLINE Py_UCS4 __Pyx_GetItemInt_Unicode_Fast(PyObject* ustring, Py_ssize_t i) {
+    Py_ssize_t length;
+#if CYTHON_PEP393_ENABLED
+    if (unlikely(__Pyx_PyUnicode_READY(ustring) < 0)) return (Py_UCS4)-1;
+#endif
+    length = __Pyx_PyUnicode_GET_LENGTH(ustring);
+    if (likely((0 <= i) & (i < length))) {
+        return __Pyx_PyUnicode_READ_CHAR(ustring, i);
+    } else if ((-length <= i) & (i < 0)) {
+        return __Pyx_PyUnicode_READ_CHAR(ustring, i + length);
+    } else {
+        PyErr_SetString(PyExc_IndexError, "string index out of range");
+        return (Py_UCS4)-1;
+    }
+}
+
+static CYTHON_INLINE Py_UCS4 __Pyx_GetItemInt_Unicode_Generic(PyObject* ustring, PyObject* j) {
+    Py_UCS4 uchar;
+    PyObject *uchar_string;
+    if (!j) return (Py_UCS4)-1;
+    uchar_string = PyObject_GetItem(ustring, j);
+    Py_DECREF(j);
+    if (!uchar_string) return (Py_UCS4)-1;
+#if CYTHON_PEP393_ENABLED
+    if (unlikely(__Pyx_PyUnicode_READY(uchar_string) < 0)) {
+        Py_DECREF(uchar_string);
+        return (Py_UCS4)-1;
+    }
+#endif
+    uchar = __Pyx_PyUnicode_READ_CHAR(uchar_string, 0);
+    Py_DECREF(uchar_string);
+    return uchar;
+}
+
+/////////////// decode_cpp_string.proto ///////////////
+//@requires IncludeCppStringH
+
+static CYTHON_INLINE PyObject* __Pyx_decode_cpp_string(
+         std::string cppstring, Py_ssize_t start, Py_ssize_t stop,
+         const char* encoding, const char* errors,
+         PyObject* (*decode_func)(const char *s, Py_ssize_t size, const char *errors));
+
+/////////////// decode_cpp_string ///////////////
+
+static CYTHON_INLINE PyObject* __Pyx_decode_cpp_string(
+         std::string cppstring, Py_ssize_t start, Py_ssize_t stop,
+         const char* encoding, const char* errors,
+         PyObject* (*decode_func)(const char *s, Py_ssize_t size, const char *errors)) {
+    const char* cstring = cppstring.data();
+    Py_ssize_t length = cppstring.size();
+
+    if (unlikely(start < 0)) {
+        start += length;
+        if (unlikely(start < 0))
+            start = 0;
+    }
+    if (unlikely(stop < 0))
+        stop += length;
+    else if (stop >= length)
+        stop = length;
+    if (unlikely(start >= stop))
+        return PyUnicode_FromUnicode(NULL, 0);
+    cstring += start;
+    length = stop - start;
+
+    if (decode_func) {
+        return decode_func(cstring, length, errors);
+    } else {
+        return PyUnicode_Decode(cstring, length, encoding, errors);
+    }
+}
+
+/////////////// decode_c_string.proto ///////////////
+
+static CYTHON_INLINE PyObject* __Pyx_decode_c_string(
+         const char* cstring, Py_ssize_t start, Py_ssize_t stop,
+         const char* encoding, const char* errors,
+         PyObject* (*decode_func)(const char *s, Py_ssize_t size, const char *errors));
+
+/////////////// decode_c_string ///////////////
+//@requires IncludeStringH
+
+static CYTHON_INLINE PyObject* __Pyx_decode_c_string(
+         const char* cstring, Py_ssize_t start, Py_ssize_t stop,
+         const char* encoding, const char* errors,
+         PyObject* (*decode_func)(const char *s, Py_ssize_t size, const char *errors)) {
+    Py_ssize_t length;
+    if (unlikely((start < 0) | (stop < 0))) {
+        length = strlen(cstring);
+        if (start < 0) {
+            start += length;
+            if (start < 0)
+                start = 0;
+        }
+        if (stop < 0)
+            stop += length;
+    }
+    length = stop - start;
+    if (unlikely(length <= 0))
+        return PyUnicode_FromUnicode(NULL, 0);
+    cstring += start;
+    if (decode_func) {
+        return decode_func(cstring, length, errors);
+    } else {
+        return PyUnicode_Decode(cstring, length, encoding, errors);
+    }
 }

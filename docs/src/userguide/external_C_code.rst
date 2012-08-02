@@ -119,7 +119,7 @@ match the C ones, and in some cases they shouldn't or can't. In particular:
        
 
 
-4. If the header file uses ``typedef`` names such as :ctype:`word` to refer
+4. If the header file uses ``typedef`` names such as :c:type:`word` to refer
    to platform-dependent flavours of numeric types, you will need a
    corresponding :keyword:`ctypedef` statement, but you don't need to match
    the type exactly, just use something of the right general kind (int, float,
@@ -127,7 +127,7 @@ match the C ones, and in some cases they shouldn't or can't. In particular:
 
        ctypedef int word
 
-   will work okay whatever the actual size of a :ctype:`word ` is (provided the header
+   will work okay whatever the actual size of a :c:type:`word` is (provided the header
    file defines it correctly). Conversion to and from Python types, if any, will also 
    be used for this new type. 
 
@@ -210,7 +210,7 @@ same applies equally to union and enum declarations.
 +-------------------------+---------------------------------------------+-----------------------------------------------------------------------+
 
 Note that in all the cases below, you refer to the type in Cython code simply
-as :ctype:`Foo`, not ``struct Foo``.
+as :c:type:`Foo`, not ``struct Foo``.
 
 Accessing Python/C API routines
 ---------------------------------
@@ -314,11 +314,25 @@ the public keyword::
     cdef public int spam # public variable declaration
 
     cdef public void grail(Bunny *): # public function declaration
-        ...
+        print "Ready the holy hand grenade"
 
 If there are any public declarations in a Cython module, a header file called
 :file:`modulename.h` file is generated containing equivalent C declarations for
 inclusion in other C code.
+
+Users who are embedding Python in C with Cython need to make sure to call Py_Initialize()
+and Py_Finalize(). For example, in the following snippet that includes :file:`modulename.h`::
+
+    #include <Python.h>
+    #include "modulename.h"
+
+    void grail() {
+        Py_Initialize();
+        initmodulename();
+        Bunny b;
+        grail(b);
+        Py_Finalize();
+    }
 
 Any C code wanting to make use of these declarations will need to be linked,
 either statically or dynamically, with the extension module.

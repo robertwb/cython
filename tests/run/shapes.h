@@ -48,6 +48,11 @@ namespace shapes {
         int radius;
     };
 
+    class Empty : public Shape {
+    public:
+        float area() { return 0; }
+    };
+
 }
 
 #endif

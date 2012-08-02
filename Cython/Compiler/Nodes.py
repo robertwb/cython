@@ -1057,6 +1057,7 @@ class CVarDefNode(StatNode):
     #  in_pxd        boolean
     #  api           boolean
     #  overridable   boolean        whether it is a cpdef
+    #  modifiers     ['inline']
 
     #  decorators    [cython.locals(...)] or None
     #  directive_locals { string : NameNode } locals defined by cython.locals(...)
@@ -1102,7 +1103,7 @@ class CVarDefNode(StatNode):
             if type.is_cfunction:
                 self.entry = dest_scope.declare_cfunction(name, type, declarator.pos,
                     cname = cname, visibility = self.visibility, in_pxd = self.in_pxd,
-                    api = self.api)
+                    api = self.api, modifiers = self.modifiers)
                 if self.entry is not None:
                     self.entry.is_overridable = self.overridable
                     self.entry.directive_locals = copy.copy(self.directive_locals)
@@ -2134,11 +2135,7 @@ class CFuncDefNode(FuncDefNode):
         else:
             storage_class = ""
         dll_linkage = None
-        modifiers = ""
-        if 'inline' in self.modifiers:
-            self.modifiers[self.modifiers.index('inline')] = 'cython_inline'
-        if self.modifiers:
-            modifiers = "%s " % ' '.join(self.modifiers).upper()
+        modifiers = code.build_function_modifiers(self.entry.func_modifiers)
 
         header = self.return_type.declaration_code(entity, dll_linkage=dll_linkage)
         #print (storage_class, modifiers, header)
@@ -3560,8 +3557,7 @@ class GeneratorDefNode(DefNode):
         code.putln('}')
 
     def generate_function_definitions(self, env, code):
-        from ExprNodes import generator_utility_code
-        env.use_utility_code(generator_utility_code)
+        env.use_utility_code(UtilityCode.load_cached("Generator", "Generator.c"))
 
         self.gbody.generate_function_header(code, proto=True)
         super(GeneratorDefNode, self).generate_function_definitions(env, code)
@@ -5371,16 +5367,21 @@ class ForInStatNode(LoopNode, StatNode):
     item = None
 
     def analyse_declarations(self, env):
+        import ExprNodes
         self.target.analyse_target_declaration(env)
         self.body.analyse_declarations(env)
         if self.else_clause:
             self.else_clause.analyse_declarations(env)
+        self.item = ExprNodes.NextNode(self.iterator)
 
     def analyse_expressions(self, env):
-        import ExprNodes
         self.target.analyse_target_types(env)
         self.iterator.analyse_expressions(env)
-        self.item = ExprNodes.NextNode(self.iterator)
+        if self.item is None:
+            # Hack. Sometimes analyse_declarations not called.
+            import ExprNodes
+            self.item = ExprNodes.NextNode(self.iterator)
+        self.item.analyse_expressions(env)
         if (self.iterator.type.is_ptr or self.iterator.type.is_array) and \
             self.target.type.assignable_from(self.iterator.type):
             # C array slice optimization.
@@ -6510,13 +6511,13 @@ class FromImportStatNode(StatNode):
             if name == '*':
                 for _, entry in env.entries.items():
                     if not entry.is_type and entry.type.is_extension_type:
-                        env.use_utility_code(ExprNodes.type_test_utility_code)
+                        env.use_utility_code(UtilityCode.load_cached("ExtTypeTest", "ObjectHandling.c"))
                         break
             else:
                 entry =  env.lookup(target.name)
                 # check whether or not entry is already cimported
                 if (entry.is_type and entry.type.name == name
-                    and hasattr(entry.type, 'module_name')):
+                        and hasattr(entry.type, 'module_name')):
                     if entry.type.module_name == self.module.module_name.value:
                         # cimported with absolute name
                         continue

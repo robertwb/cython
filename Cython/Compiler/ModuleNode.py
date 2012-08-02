@@ -811,10 +811,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             if not method_entry.is_inherited and method_entry.final_func_cname:
                 declaration = method_entry.type.declaration_code(
                     method_entry.final_func_cname)
-                if method_entry.func_modifiers:
-                    modifiers = "%s " % ' '.join(method_entry.func_modifiers).upper()
-                else:
-                    modifiers = ''
+                modifiers = code.build_function_modifiers(method_entry.func_modifiers)
                 code.putln("static %s%s;" % (modifiers, declaration))
 
     def generate_objstruct_predeclaration(self, type, code):
@@ -915,7 +912,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 
     def generate_cfunction_declarations(self, env, code, definition):
         for entry in env.cfunc_entries:
-            if entry.used:
+            if entry.used or (entry.visibility == 'public' or entry.api):
                 generate_cfunction_declaration(entry, env, code, definition)
 
     def generate_variable_definitions(self, env, code):
@@ -990,6 +987,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 
         have_entries, (py_attrs, py_buffers, memoryview_slices) = \
                         scope.get_refcounted_entries(include_weakref=True)
+        cpp_class_attrs = [entry for entry in scope.var_entries if entry.type.is_cpp_class]
 
         new_func_entry = scope.lookup_here("__new__")
         if base_type or (new_func_entry and new_func_entry.is_special
@@ -998,7 +996,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         else:
             unused_marker = 'CYTHON_UNUSED '
 
-        need_self_cast = type.vtabslot_cname or have_entries
+        need_self_cast = type.vtabslot_cname or have_entries or cpp_class_attrs
         code.putln("")
         code.putln(
             "static PyObject *%s(PyTypeObject *t, %sPyObject *a, %sPyObject *k) {"
@@ -1035,6 +1033,10 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             code.putln("p->%s = %s%s;" % (
                 type.vtabslot_cname,
                 struct_type_cast, type.vtabptr_cname))
+
+        for entry in cpp_class_attrs:
+            code.putln("new((void*)&(p->%s)) %s();" % 
+                       (entry.cname, entry.type.cname));
 
         for entry in py_attrs:
             if scope.is_internal or entry.name == "__weakref__":
@@ -1082,14 +1084,22 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 
         weakref_slot = scope.lookup_here("__weakref__")
         _, (py_attrs, _, memoryview_slices) = scope.get_refcounted_entries()
+        cpp_class_attrs = [entry for entry in scope.var_entries if entry.type.is_cpp_class]
 
-        if py_attrs or memoryview_slices or weakref_slot in scope.var_entries:
+        if (py_attrs
+            or cpp_class_attrs
+            or memoryview_slices
+            or weakref_slot in scope.var_entries):
             self.generate_self_cast(scope, code)
 
         # call the user's __dealloc__
         self.generate_usr_dealloc_call(scope, code)
         if weakref_slot in scope.var_entries:
             code.putln("if (p->__weakref__) PyObject_ClearWeakRefs(o);")
+
+        for entry in cpp_class_attrs:
+            class_name = entry.type.cname.split("::")[-1]
+            code.putln("p->%s.~%s();" % (entry.cname, class_name));
 
         for entry in py_attrs:
             code.put_xdecref("p->%s" % entry.cname, entry.type, nanny=False)
@@ -2158,10 +2168,6 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         # table pointer if any.
         if type in env.types_imported:
             return
-        if type.typedef_flag:
-            objstruct = type.objstruct_cname
-        else:
-            objstruct = "struct %s" % type.objstruct_cname
         self.generate_type_import_call(type, code,
                                        code.error_goto_if_null(type.typeptr_cname, pos))
         self.use_type_import_utility_code(env)
@@ -2181,8 +2187,9 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             objstruct = type.objstruct_cname
         else:
             objstruct = "struct %s" % type.objstruct_cname
+        sizeof_objstruct = objstruct
         module_name = type.module_name
-        condition = None
+        condition = replacement = None
         if module_name not in ('__builtin__', 'builtins'):
             module_name = '"%s"' % module_name
         else:
@@ -2190,22 +2197,38 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             if type.name in Code.non_portable_builtins_map:
                 condition, replacement = Code.non_portable_builtins_map[type.name]
                 code.putln("#if %s" % condition)
-                code.putln('%s = __Pyx_ImportType(%s, "%s", sizeof(%s), 1); %s' % (
-                        type.typeptr_cname,
-                        module_name,
-                        replacement,
-                        objstruct,
-                        error_code))
-                code.putln("#else")
-        code.putln('%s = __Pyx_ImportType(%s, "%s", sizeof(%s), %i); %s' % (
-                type.typeptr_cname,
-                module_name,
-                type.name,
-                objstruct,
-                not type.is_external or type.is_subclassed,
-                error_code))
-        if condition:
+            if objstruct in Code.basicsize_builtins_map:
+                # Some builtin types have a tp_basicsize which differs from sizeof(...):
+                sizeof_objstruct = Code.basicsize_builtins_map[objstruct]
+
+        code.put('%s = __Pyx_ImportType(%s,' % (
+            type.typeptr_cname,
+            module_name))
+
+        if condition and replacement:
+            code.putln("")  # start in new line
+            code.putln("#if %s" % condition)
+            code.putln('"%s",' % replacement)
+            code.putln("#else")
+            code.putln('"%s",' % type.name)
             code.putln("#endif")
+        else:
+            code.put(' "%s", ' % type.name)
+
+        if sizeof_objstruct != objstruct:
+            if not condition:
+                code.putln("")  # start in new line
+            code.putln("#if CYTHON_COMPILING_IN_PYPY")
+            code.putln('sizeof(%s),' % objstruct)
+            code.putln("#else")
+            code.putln('sizeof(%s),' % sizeof_objstruct)
+            code.putln("#endif")
+        else:
+            code.put('sizeof(%s), ' % objstruct)
+
+        code.putln('%i); %s' % (
+            not type.is_external or type.is_subclassed,
+            error_code))
 
     def generate_type_ready_code(self, env, entry, code):
         # Generate a call to PyType_Ready for an extension
@@ -2322,31 +2345,28 @@ def generate_cfunction_declaration(entry, env, code, definition):
     if entry.used and entry.inline_func_in_pxd or (not entry.in_cinclude and (definition
             or entry.defined_in_pxd or entry.visibility == 'extern' or from_cy_utility)):
         if entry.visibility == 'extern':
-            storage_class = "%s " % Naming.extern_c_macro
+            storage_class = Naming.extern_c_macro
             dll_linkage = "DL_IMPORT"
         elif entry.visibility == 'public':
-            storage_class = "%s " % Naming.extern_c_macro
+            storage_class = Naming.extern_c_macro
             dll_linkage = "DL_EXPORT"
         elif entry.visibility == 'private':
-            storage_class = "static "
+            storage_class = "static"
             dll_linkage = None
         else:
-            storage_class = "static "
+            storage_class = "static"
             dll_linkage = None
         type = entry.type
 
         if entry.defined_in_pxd and not definition:
-            storage_class = "static "
+            storage_class = "static"
             dll_linkage = None
             type = CPtrType(type)
 
-        header = type.declaration_code(entry.cname,
-                                       dll_linkage = dll_linkage)
-        if entry.func_modifiers:
-            modifiers = "%s " % ' '.join(entry.func_modifiers).upper()
-        else:
-            modifiers = ''
-        code.putln("%s%s%s; /*proto*/" % (
+        header = type.declaration_code(
+            entry.cname, dll_linkage = dll_linkage)
+        modifiers = code.build_function_modifiers(entry.func_modifiers)
+        code.putln("%s %s%s; /*proto*/" % (
             storage_class,
             modifiers,
             header))

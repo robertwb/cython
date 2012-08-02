@@ -444,14 +444,24 @@ static CYTHON_INLINE int __Pyx_init_unicode_iteration(
 
 static double __Pyx__PyObject_AsDouble(PyObject* obj); /* proto */
 
+#if CYTHON_COMPILING_IN_PYPY
+#define __Pyx_PyObject_AsDouble(obj) \
+(likely(PyFloat_CheckExact(obj)) ? PyFloat_AS_DOUBLE(obj) : \
+ likely(PyInt_CheckExact(obj)) ? \
+ PyFloat_AsDouble(obj) : __Pyx__PyObject_AsDouble(obj))
+#else
 #define __Pyx_PyObject_AsDouble(obj) \
 ((likely(PyFloat_CheckExact(obj))) ? \
  PyFloat_AS_DOUBLE(obj) : __Pyx__PyObject_AsDouble(obj))
+#endif
 
 /////////////// pyobject_as_double ///////////////
 
 static double __Pyx__PyObject_AsDouble(PyObject* obj) {
     PyObject* float_value;
+#if CYTHON_COMPILING_IN_PYPY
+    float_value = PyNumber_Float(obj);
+#else
     if (Py_TYPE(obj)->tp_as_number && Py_TYPE(obj)->tp_as_number->nb_float) {
         return PyFloat_AsDouble(obj);
     } else if (PyUnicode_CheckExact(obj) || PyBytes_CheckExact(obj)) {
@@ -468,6 +478,7 @@ static double __Pyx__PyObject_AsDouble(PyObject* obj) {
         PyTuple_SET_ITEM(args, 0, 0);
         Py_DECREF(args);
     }
+#endif
     if (likely(float_value)) {
         double value = PyFloat_AS_DOUBLE(float_value);
         Py_DECREF(float_value);

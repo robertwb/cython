@@ -1329,7 +1329,7 @@ class NewExprNode(AtomicExprNode):
         self.cpp_check(env)
         constructor = type.scope.lookup(u'<init>')
         if constructor is None:
-            return_type = PyrexTypes.CFuncType(type, [])
+            return_type = PyrexTypes.CFuncType(type, [], exception_check='+')
             return_type = PyrexTypes.CPtrType(return_type)
             type.scope.declare_cfunction(u'<init>', return_type, self.pos)
             constructor = type.scope.lookup(u'<init>')
@@ -1982,6 +1982,8 @@ class IteratorNode(ExprNode):
                 not self.sequence.type.is_string:
             # C array iteration will be transformed later on
             self.type = self.sequence.type
+        elif self.sequence.type.is_cpp_class:
+            self.analyse_cpp_types(env)
         else:
             self.sequence = self.sequence.coerce_to_pyobject(env)
             if self.sequence.type is list_type or \
@@ -1996,8 +1998,75 @@ class IteratorNode(ExprNode):
             PyrexTypes.CFuncTypeArg("it", PyrexTypes.py_object_type, None),
             ]))
 
+    def type_dependencies(self, env):
+        return self.sequence.type_dependencies(env)
+
+    def infer_type(self, env):
+        sequence_type = self.sequence.infer_type(env)
+        if sequence_type.is_array or sequence_type.is_ptr:
+            return sequence_type
+        elif sequence_type.is_cpp_class:
+            begin = sequence_type.scope.lookup("begin")
+            if begin is not None:
+                return begin.type.base_type.return_type
+        elif sequence_type.is_pyobject:
+            return sequence_type
+        else:
+            return py_object_type
+    
+    def analyse_cpp_types(self, env):
+        sequence_type = self.sequence.type
+        if sequence_type.is_ptr:
+            sequence_type = sequence_type.base_type
+        begin = sequence_type.scope.lookup("begin")
+        end = sequence_type.scope.lookup("end")
+        if (begin is None
+            or not begin.type.is_ptr
+            or not begin.type.base_type.is_cfunction
+            or begin.type.base_type.args):
+            error(self.pos, "missing begin() on %s" % self.sequence.type)
+            self.type = error_type
+            return
+        if (end is None
+            or not end.type.is_ptr
+            or not end.type.base_type.is_cfunction
+            or end.type.base_type.args):
+            error(self.pos, "missing end() on %s" % self.sequence.type)
+            self.type = error_type
+            return
+        iter_type = begin.type.base_type.return_type
+        if iter_type.is_cpp_class:
+            if env.lookup_operator_for_types(
+                    self.pos,
+                    "!=",
+                    [iter_type, end.type.base_type.return_type]) is None:
+                error(self.pos, "missing operator!= on result of begin() on %s" % self.sequence.type)
+                self.type = error_type
+                return
+            if env.lookup_operator_for_types(self.pos, '++', [iter_type]) is None:
+                error(self.pos, "missing operator++ on result of begin() on %s" % self.sequence.type)
+                self.type = error_type
+                return
+            if env.lookup_operator_for_types(self.pos, '*', [iter_type]) is None:
+                error(self.pos, "missing operator* on result of begin() on %s" % self.sequence.type)
+                self.type = error_type
+                return
+            self.type = iter_type
+        elif iter_type.is_ptr:
+            if not (iter_type == end.type.base_type.return_type):
+                error(self.pos, "incompatible types for begin() and end()")
+            self.type = iter_type
+        else:
+            error(self.pos, "result type of begin() on %s must be a C++ class or pointer" % self.sequence.type)
+            self.type = error_type
+            return
+    
     def generate_result_code(self, code):
         sequence_type = self.sequence.type
+        if sequence_type.is_cpp_class:
+            # TODO: Limit scope.
+            code.putln("%s = %s.begin();" % (self.result(), self.sequence.result()))
+            return
         if sequence_type.is_array or sequence_type.is_ptr:
             raise InternalError("for in carray slice not transformed")
         is_builtin_sequence = sequence_type is list_type or \
@@ -2055,6 +2124,7 @@ class IteratorNode(ExprNode):
             inc_dec = '--'
         else:
             inc_dec = '++'
+        code.putln("#if CYTHON_COMPILING_IN_CPYTHON")
         code.putln(
             "%s = Py%s_GET_ITEM(%s, %s); __Pyx_INCREF(%s); %s%s;" % (
                 result_name,
@@ -2064,12 +2134,32 @@ class IteratorNode(ExprNode):
                 result_name,
                 self.counter_cname,
                 inc_dec))
+        code.putln("#else")
+        code.putln(
+            "%s = PySequence_ITEM(%s, %s); %s%s; %s;" % (
+                result_name,
+                self.py_result(),
+                self.counter_cname,
+                self.counter_cname,
+                inc_dec,
+                code.error_goto_if_null(result_name, self.pos)))
+        code.putln("#endif")
 
     def generate_iter_next_result_code(self, result_name, code):
         sequence_type = self.sequence.type
         if self.reversed:
             code.putln("if (%s < 0) break;" % self.counter_cname)
-        if sequence_type is list_type:
+        if sequence_type.is_cpp_class:
+            # TODO: Cache end() call?
+            code.putln("if (!(%s != %s.end())) break;" % (
+                            self.result(),
+                            self.sequence.result()));
+            code.putln("%s = *%s;" % (
+                            result_name,
+                            self.result()))
+            code.putln("++%s;" % self.result())
+            return
+        elif sequence_type is list_type:
             self.generate_next_sequence_item('List', result_name, code)
             return
         elif sequence_type is tuple_type:
@@ -2116,13 +2206,35 @@ class NextNode(AtomicExprNode):
     #
     #  iterator   IteratorNode
 
-    type = py_object_type
-
     def __init__(self, iterator):
         self.pos = iterator.pos
         self.iterator = iterator
-        if iterator.type.is_ptr or iterator.type.is_array:
-            self.type = iterator.type.base_type
+
+    def type_dependencies(self, env):
+        return self.iterator.type_dependencies(env)
+
+    def infer_type(self, env, iterator_type = None):
+        if iterator_type is None:
+            iterator_type = self.iterator.infer_type(env)
+        if iterator_type.is_ptr or iterator_type.is_array:
+            return iterator_type.base_type
+        elif iterator_type.is_cpp_class:
+            item_type = env.lookup_operator_for_types(self.pos, "*", [iterator_type]).type.base_type.return_type
+            if item_type.is_reference:
+                item_type = item_type.ref_base_type
+            return item_type
+        else:
+            # Avoid duplication of complicated logic.
+            fake_index_node = IndexNode(self.pos,
+                                        base=self.iterator.sequence,
+                                        index=IntNode(self.pos, value='0'))
+            # TODO(vile hack): infer_type should be side-effect free
+            if isinstance(self.iterator.sequence, SimpleCallNode):
+                return py_object_type
+            return fake_index_node.infer_type(env)
+
+    def analyse_types(self, env):
+        self.type = self.infer_type(env, self.iterator.type)
         self.is_temp = 1
 
     def generate_result_code(self, code):
@@ -2243,9 +2355,11 @@ class PyTempNode(TempNode):
 class RawCNameExprNode(ExprNode):
     subexprs = []
 
-    def __init__(self, pos, type=None):
+    def __init__(self, pos, type=None, cname=None):
         self.pos = pos
         self.type = type
+        if cname is not None:
+            self.cname = cname
 
     def analyse_types(self, env):
         return self.type
@@ -2447,6 +2561,18 @@ class IndexNode(ExprNode):
                 return py_object_type
             elif base_type.is_ptr or base_type.is_array:
                 return base_type.base_type
+
+        if base_type.is_cpp_class:
+            class FakeOperand:
+                def __init__(self, **kwds):
+                    self.__dict__.update(kwds)
+            operands = [
+                FakeOperand(pos=self.pos, type=base_type),
+                FakeOperand(pos=self.pos, type=index_type),
+            ]
+            index_func = env.lookup_operator('[]', operands)
+            if index_func is not None:
+                return index_func.type.base_type.return_type
 
         # may be slicing or indexing, we don't know
         if base_type in (unicode_type, str_type):
@@ -2951,7 +3077,8 @@ class IndexNode(ExprNode):
                         function = "__Pyx_GetItemInt_Tuple"
                     else:
                         function = "__Pyx_GetItemInt"
-                    code.globalstate.use_utility_code(getitem_int_utility_code)
+                    code.globalstate.use_utility_code(
+                        TempitaUtilityCode.load_cached("GetItemInt", "ObjectHandling.c"))
                 else:
                     index_code = self.index.py_result()
                     if self.base.type is dict_type:
@@ -2974,7 +3101,8 @@ class IndexNode(ExprNode):
                 assert self.index.type.is_int
                 index_code = self.index.result()
                 function = "__Pyx_GetItemInt_Unicode"
-                code.globalstate.use_utility_code(getitem_int_pyunicode_utility_code)
+                code.globalstate.use_utility_code(
+                    UtilityCode.load_cached("GetItemIntUnicode", "StringTools.c"))
                 code.putln(
                     "%s = %s(%s, %s%s); if (unlikely(%s == (Py_UCS4)-1)) %s;" % (
                         self.result(),
@@ -2989,18 +3117,19 @@ class IndexNode(ExprNode):
         if self.index.type.is_int:
             function = "__Pyx_SetItemInt"
             index_code = self.index.result()
-            code.globalstate.use_utility_code(setitem_int_utility_code)
+            code.globalstate.use_utility_code(
+                UtilityCode.load_cached("SetItemInt", "ObjectHandling.c"))
         else:
             index_code = self.index.py_result()
             if self.base.type is dict_type:
                 function = "PyDict_SetItem"
             # It would seem that we could specialized lists/tuples, but that
             # shouldn't happen here.
-            # Both PyList_SetItem PyTuple_SetItem and a Py_ssize_t as input,
-            # not a PyObject*, and bad conversion here would give the wrong
-            # exception. Also, tuples are supposed to be immutable, and raise
-            # TypeErrors when trying to set their entries (PyTuple_SetItem
-            # is for creating new tuples from).
+            # Both PyList_SetItem() and PyTuple_SetItem() take a Py_ssize_t as
+            # index instead of an object, and bad conversion here would give
+            # the wrong exception. Also, tuples are supposed to be immutable,
+            # and raise a TypeError when trying to set their entries
+            # (PyTuple_SetItem() is for creating new tuples from scratch).
             else:
                 function = "PyObject_SetItem"
         code.putln(
@@ -3024,9 +3153,8 @@ class IndexNode(ExprNode):
             rhs_code = rhs.result()
             code.putln("%s = %s;" % (ptr, ptrexpr))
             code.put_gotref("*%s" % ptr)
-            code.putln("__Pyx_DECREF(*%s); __Pyx_INCREF(%s);" % (
-                ptr, rhs_code
-                ))
+            code.putln("__Pyx_INCREF(%s); __Pyx_DECREF(*%s);" % (
+                rhs_code, ptr))
             code.putln("*%s %s= %s;" % (ptr, op, rhs_code))
             code.put_giveref("*%s" % ptr)
             code.funcstate.release_temp(ptr)
@@ -3070,7 +3198,8 @@ class IndexNode(ExprNode):
         if self.index.type.is_int:
             function = "__Pyx_DelItemInt"
             index_code = self.index.result()
-            code.globalstate.use_utility_code(delitem_int_utility_code)
+            code.globalstate.use_utility_code(
+                UtilityCode.load_cached("DelItemInt", "ObjectHandling.c"))
         else:
             index_code = self.index.py_result()
             if self.base.type is dict_type:
@@ -3192,7 +3321,7 @@ class SliceIndexNode(ExprNode):
 
     def infer_type(self, env):
         base_type = self.base.infer_type(env)
-        if base_type.is_string:
+        if base_type.is_string or base_type.is_cpp_class:
             return bytes_type
         elif base_type in (bytes_type, str_type, unicode_type,
                            list_type, tuple_type):
@@ -3256,7 +3385,7 @@ class SliceIndexNode(ExprNode):
         if self.stop:
             self.stop.analyse_types(env)
         base_type = self.base.type
-        if base_type.is_string:
+        if base_type.is_string or base_type.is_cpp_string:
             self.type = bytes_type
         elif base_type.is_ptr:
             self.type = base_type
@@ -3849,7 +3978,7 @@ class SimpleCallNode(CallNode):
         # C++ exception handler
         if func_type.exception_check == '+':
             if func_type.exception_value is None:
-                env.use_utility_code(cpp_exception_utility_code)
+                env.use_utility_code(UtilityCode.load_cached("CppExceptionConversion", "CppSupport.cpp"))
 
     def calculate_result_code(self):
         return self.c_call_code()
@@ -4928,44 +5057,10 @@ class SequenceNode(ExprNode):
                           or rhs.type in (tuple_type, list_type)
                           or not rhs.type.is_builtin_type)
         long_enough_for_a_loop = len(self.unpacked_items) > 3
-        if special_unpack:
-            tuple_check = 'likely(PyTuple_CheckExact(%s))' % rhs.py_result()
-            list_check  = 'PyList_CheckExact(%s)' % rhs.py_result()
-            sequence_type_test = '1'
-            if rhs.type is list_type:
-                sequence_types = ['List']
-                if rhs.may_be_none():
-                    sequence_type_test = list_check
-            elif rhs.type is tuple_type:
-                sequence_types = ['Tuple']
-                if rhs.may_be_none():
-                    sequence_type_test = tuple_check
-            else:
-                sequence_types = ['Tuple', 'List']
-                sequence_type_test = "(%s) || (%s)" % (tuple_check, list_check)
-            code.putln("#if CYTHON_COMPILING_IN_CPYTHON")
-            code.putln("if (%s) {" % sequence_type_test)
-            code.putln("PyObject* sequence = %s;" % rhs.py_result())
-            if len(sequence_types) == 2:
-                code.putln("if (likely(Py%s_CheckExact(sequence))) {" % sequence_types[0])
-            self.generate_special_parallel_unpacking_code(
-                code, sequence_types[0],
-                use_loop=long_enough_for_a_loop and sequence_types[0] != 'Tuple')
-            if len(sequence_types) == 2:
-                code.putln("} else {")
-                self.generate_special_parallel_unpacking_code(
-                    code, sequence_types[1], use_loop=long_enough_for_a_loop)
-                code.putln("}")
-            rhs.generate_disposal_code(code)
-            code.putln("} else")
-            if rhs.type is tuple_type:
-                code.putln("if (1) {")
-                code.globalstate.use_utility_code(tuple_unpacking_error_code)
-                code.putln("__Pyx_UnpackTupleError(%s, %s); %s" % (
-                    rhs.py_result(), len(self.args), code.error_goto(self.pos)))
-                code.putln("} else")
-            code.putln("#endif")
 
+        if special_unpack:
+            self.generate_special_parallel_unpacking_code(
+                code, rhs, use_loop=long_enough_for_a_loop)
         code.putln("{")
         self.generate_generic_parallel_unpacking_code(
             code, rhs, self.unpacked_items, use_loop=long_enough_for_a_loop)
@@ -4977,40 +5072,84 @@ class SequenceNode(ExprNode):
             self.args[i].generate_assignment_code(
                 self.coerced_unpacked_items[i], code)
 
-    def generate_special_parallel_unpacking_code(self, code, sequence_type, use_loop):
-        code.globalstate.use_utility_code(raise_need_more_values_to_unpack)
+    def generate_special_parallel_unpacking_code(self, code, rhs, use_loop):
+        tuple_check = 'likely(PyTuple_CheckExact(%s))' % rhs.py_result()
+        list_check  = 'PyList_CheckExact(%s)' % rhs.py_result()
+        sequence_type_test = '1'
+        if rhs.type is list_type:
+            sequence_types = ['List']
+            if rhs.may_be_none():
+                sequence_type_test = list_check
+        elif rhs.type is tuple_type:
+            sequence_types = ['Tuple']
+            if rhs.may_be_none():
+                sequence_type_test = tuple_check
+        else:
+            sequence_types = ['Tuple', 'List']
+            sequence_type_test = "(%s) || (%s)" % (tuple_check, list_check)
+
+        code.putln("if (%s) {" % sequence_type_test)
+        code.putln("PyObject* sequence = %s;" % rhs.py_result())
+
+        # list/tuple => check size
+        code.putln("#if CYTHON_COMPILING_IN_CPYTHON")
+        code.putln("Py_ssize_t size = Py_SIZE(sequence);")
+        code.putln("#else")
+        code.putln("Py_ssize_t size = PySequence_Size(sequence);")  # < 0 => exception
+        code.putln("#endif")
+        code.putln("if (unlikely(size != %d)) {" % len(self.args))
         code.globalstate.use_utility_code(raise_too_many_values_to_unpack)
-
-        if use_loop:
-            # must be at the start of a C block!
-            code.putln("PyObject** temps[%s] = {%s};" % (
-                len(self.unpacked_items),
-                ','.join(['&%s' % item.result() for item in self.unpacked_items])))
-
-        code.putln("if (unlikely(Py%s_GET_SIZE(sequence) != %d)) {" % (
-            sequence_type, len(self.args)))
-        code.putln("if (Py%s_GET_SIZE(sequence) > %d) __Pyx_RaiseTooManyValuesError(%d);" % (
-            sequence_type, len(self.args), len(self.args)))
-        code.putln("else __Pyx_RaiseNeedMoreValuesError(Py%s_GET_SIZE(sequence));" % sequence_type)
+        code.putln("if (size > %d) __Pyx_RaiseTooManyValuesError(%d);" % (
+            len(self.args), len(self.args)))
+        code.globalstate.use_utility_code(raise_need_more_values_to_unpack)
+        code.putln("else if (size >= 0) __Pyx_RaiseNeedMoreValuesError(size);")
         code.putln(code.error_goto(self.pos))
         code.putln("}")
 
-        if use_loop:
-            # shorter code in a loop works better for lists in CPython
-            counter = code.funcstate.allocate_temp(PyrexTypes.c_py_ssize_t_type, manage_ref=False)
-            code.putln("for (%s=0; %s < %s; %s++) {" % (
-                counter, counter, len(self.unpacked_items), counter))
-            code.putln("PyObject* item = Py%s_GET_ITEM(sequence, %s);" % (
-                sequence_type, counter))
-            code.putln("*(temps[%s]) = item;" % counter)
-            code.put_incref("item", PyrexTypes.py_object_type)
-            code.putln("}")
-            code.funcstate.release_temp(counter)
-        else:
-            # unrolling the loop is very fast for tuples in CPython
+        code.putln("#if CYTHON_COMPILING_IN_CPYTHON")
+        # unpack items from list/tuple in unrolled loop (can't fail)
+        if len(sequence_types) == 2:
+            code.putln("if (likely(Py%s_CheckExact(sequence))) {" % sequence_types[0])
+        for i, item in enumerate(self.unpacked_items):
+            code.putln("%s = Py%s_GET_ITEM(sequence, %d); " % (
+                item.result(), sequence_types[0], i))
+        if len(sequence_types) == 2:
+            code.putln("} else {")
             for i, item in enumerate(self.unpacked_items):
-                code.putln("%s = Py%s_GET_ITEM(sequence, %d); " % (item.result(), sequence_type, i))
-                code.put_incref(item.result(), item.ctype())
+                code.putln("%s = Py%s_GET_ITEM(sequence, %d); " % (
+                    item.result(), sequence_types[1], i))
+            code.putln("}")
+        for item in self.unpacked_items:
+            code.put_incref(item.result(), item.ctype())
+
+        code.putln("#else")
+        # in non-CPython, use the PySequence protocol (which can fail)
+        if not use_loop:
+            for i, item in enumerate(self.unpacked_items):
+                code.putln("%s = PySequence_ITEM(sequence, %d); %s" % (
+                    item.result(), i,
+                    code.error_goto_if_null(item.result(), self.pos)))
+        else:
+            code.putln("Py_ssize_t i;")
+            code.putln("PyObject** temps[%s] = {%s};" % (
+                len(self.unpacked_items),
+                ','.join(['&%s' % item.result() for item in self.unpacked_items])))
+            code.putln("for (i=0; i < %s; i++) {" % len(self.unpacked_items))
+            code.putln("PyObject* item = PySequence_ITEM(sequence, i); %s" % (
+                code.error_goto_if_null('item', self.pos)))
+            code.putln("*(temps[i]) = item;")
+            code.putln("}")
+
+        code.putln("#endif")
+        rhs.generate_disposal_code(code)
+
+        if rhs.type is tuple_type:
+            # if not a tuple: None => save some code by generating the error directly
+            code.putln("} else if (1) {")
+            code.globalstate.use_utility_code(
+                UtilityCode.load_cached("RaiseNoneIterError", "ObjectHandling.c"))
+            code.putln("__Pyx_RaiseNoneNotIterableError(); %s" % code.error_goto(self.pos))
+        code.putln("} else")
 
     def generate_generic_parallel_unpacking_code(self, code, rhs, unpacked_items, use_loop, terminate=True):
         code.globalstate.use_utility_code(raise_need_more_values_to_unpack)
@@ -5138,7 +5277,7 @@ class SequenceNode(ExprNode):
                 # resize the list the hard way
                 code.putln("((PyVarObject*)%s)->ob_size--;" % target_list)
                 code.putln('#else')
-                code.putln("%s = PySequence_GetItem(%s, %s-%d); " % (
+                code.putln("%s = PySequence_ITEM(%s, %s-%d); " % (
                     item.py_result(), target_list, length_temp, i+1))
                 code.putln('#endif')
                 code.put_gotref(item.py_result())
@@ -5314,13 +5453,13 @@ class ListNode(SequenceNode):
             error(self.pos, "Cannot coerce list to type '%s'" % dst_type)
         return self
 
-    def release_temp(self, env):
+    def release_temp_result(self, env):
         if self.type.is_array:
             # To be valid C++, we must allocate the memory on the stack
             # manually and be sure not to reuse it for something else.
             pass
         else:
-            SequenceNode.release_temp(self, env)
+            SequenceNode.release_temp_result(self, env)
 
     def calculate_constant_result(self):
         if self.mult_factor:
@@ -6096,7 +6235,8 @@ class ClassCellInjectorNode(ExprNode):
 
     def analyse_expressions(self, env):
         if self.is_active:
-            env.use_utility_code(cyfunction_class_cell_utility_code)
+            env.use_utility_code(
+                UtilityCode.load_cached("CyFunctionClassCell", "CythonFunction.c"))
 
     def generate_evaluation_code(self, code):
         if self.is_active:
@@ -6238,9 +6378,11 @@ class PyCFunctionNode(ExprNode, ModuleNameMixin):
     def analyse_types(self, env):
         if self.binding:
             if self.specialized_cpdefs or self.is_specialization:
-                env.use_utility_code(fused_function_utility_code)
+                env.use_utility_code(
+                    UtilityCode.load_cached("FusedFunction", "CythonFunction.c"))
             else:
-                env.use_utility_code(binding_cfunc_utility_code)
+                env.use_utility_code(
+                    UtilityCode.load_cached("CythonFunction", "CythonFunction.c"))
             self.analyse_default_args(env)
 
         #TODO(craig,haoyu) This should be moved to a better place
@@ -6846,6 +6988,13 @@ class UnopNode(ExprNode):
 
     def infer_type(self, env):
         operand_type = self.operand.infer_type(env)
+        if operand_type.is_cpp_class or operand_type.is_ptr:
+            cpp_type = operand_type.find_cpp_operation_type(self.operator)
+            if cpp_type is not None:
+                return cpp_type
+        return self.infer_unop_type(env, operand_type)
+
+    def infer_unop_type(self, env, operand_type):
         if operand_type.is_pyobject:
             return py_object_type
         else:
@@ -6900,29 +7049,22 @@ class UnopNode(ExprNode):
         self.type = PyrexTypes.error_type
 
     def analyse_cpp_operation(self, env):
-        type = self.operand.type
-        if type.is_ptr:
-            type = type.base_type
-        function = type.scope.lookup("operator%s" % self.operator)
-        if not function:
-            error(self.pos, "'%s' operator not defined for %s"
-                % (self.operator, type))
+        cpp_type = self.operand.type.find_cpp_operation_type(self.operator)
+        if cpp_type is None:
+            error(self.pos, "'%s' operator not defined for %s" % (
+                self.operator, type))
             self.type_error()
             return
-        func_type = function.type
-        if func_type.is_ptr:
-            func_type = func_type.base_type
-        self.type = func_type.return_type
+        self.type = cpp_type
 
 
-class NotNode(ExprNode):
+class NotNode(UnopNode):
     #  'not' operator
     #
     #  operand   ExprNode
+    operator = '!'
 
     type = PyrexTypes.c_bint_type
-
-    subexprs = ['operand']
 
     def calculate_constant_result(self):
         self.constant_result = not self.operand.constant_result
@@ -6934,12 +7076,21 @@ class NotNode(ExprNode):
         except Exception, e:
             self.compile_time_value_error(e)
 
-    def infer_type(self, env):
+    def infer_unop_type(self, env, operand_type):
         return PyrexTypes.c_bint_type
 
     def analyse_types(self, env):
         self.operand.analyse_types(env)
-        self.operand = self.operand.coerce_to_boolean(env)
+        operand_type = self.operand.type
+        if operand_type.is_cpp_class:
+            cpp_type = operand_type.find_cpp_operation_type(self.operator)
+            if not cpp_type:
+                error(self.pos, "'!' operator not defined for %s" % operand_type)
+                self.type = PyrexTypes.error_type
+                return
+            self.type = cpp_type
+        else:
+            self.operand = self.operand.coerce_to_boolean(env)
 
     def calculate_result_code(self):
         return "(!%s)" % self.operand.result()
@@ -7026,6 +7177,12 @@ class DereferenceNode(CUnopNode):
 
     operator = '*'
 
+    def infer_unop_type(self, env, operand_type):
+        if operand_type.is_ptr:
+            return operand_type.base_type
+        else:
+            return PyrexTypes.error_type
+
     def analyse_c_operation(self, env):
         if self.operand.type.is_ptr:
             self.type = self.operand.type.base_type
@@ -7058,20 +7215,24 @@ def inc_dec_constructor(is_prefix, operator):
     return lambda pos, **kwds: DecrementIncrementNode(pos, is_prefix=is_prefix, operator=operator, **kwds)
 
 
-class AmpersandNode(ExprNode):
+class AmpersandNode(CUnopNode):
     #  The C address-of operator.
     #
     #  operand  ExprNode
+    operator = '&'
 
-    subexprs = ['operand']
-
-    def infer_type(self, env):
-        return PyrexTypes.c_ptr_type(self.operand.infer_type(env))
+    def infer_unop_type(self, env, operand_type):
+        return PyrexTypes.c_ptr_type(operand_type)
 
     def analyse_types(self, env):
         self.operand.analyse_types(env)
         argtype = self.operand.type
-        if not (argtype.is_cfunction or self.operand.is_addressable()):
+        if argtype.is_cpp_class:
+            cpp_type = argtype.find_cpp_operation_type(self.operator)
+            if cpp_type is not None:
+                self.type = cpp_type
+                return
+        if not (argtype.is_cfunction or argtype.is_reference or self.operand.is_addressable()):
             if argtype.is_memoryviewslice:
                 self.error("Cannot take address of memoryview slice")
             else:
@@ -7148,8 +7309,9 @@ class TypecastNode(ExprNode):
         self.operand.analyse_types(env)
         to_py = self.type.is_pyobject
         from_py = self.operand.type.is_pyobject
-        if from_py and not to_py and self.operand.is_ephemeral() and not self.type.is_numeric:
-            error(self.pos, "Casting temporary Python object to non-numeric non-Python type")
+        if from_py and not to_py and self.operand.is_ephemeral():
+            if not self.type.is_numeric and not self.type.is_cpp_class:
+                error(self.pos, "Casting temporary Python object to non-numeric non-Python type")
         if to_py and not from_py:
             if self.type is bytes_type and self.operand.type.is_int:
                 # FIXME: the type cast node isn't needed in this case
@@ -7775,6 +7937,16 @@ class CBinopNode(BinopNode):
             self.operand1.result(),
             self.operator,
             self.operand2.result())
+
+    def compute_c_result_type(self, type1, type2):
+        cpp_type = None
+        if type1.is_cpp_class or type1.is_ptr:
+            cpp_type = type1.find_cpp_operation_type(self.operator, type2)
+        # FIXME: handle the reversed case?
+        #if cpp_type is None and (type2.is_cpp_class or type2.is_ptr):
+        #    cpp_type = type2.find_cpp_operation_type(self.operator, type1)
+        # FIXME: do we need to handle other cases here?
+        return cpp_type
 
 
 def c_binop_constructor(operator):
@@ -9203,7 +9375,7 @@ class CoerceToPyTypeNode(CoercionNode):
         CoercionNode.__init__(self, arg)
         if type is py_object_type:
             # be specific about some known types
-            if arg.type.is_string:
+            if arg.type.is_string or arg.type.is_cpp_string:
                 self.type = bytes_type
             elif arg.type.is_unicode_char:
                 self.type = unicode_type
@@ -9720,51 +9892,6 @@ bad:
 
 #------------------------------------------------------------------------------------
 
-cpp_exception_utility_code = UtilityCode(
-proto = """
-#ifndef __Pyx_CppExn2PyErr
-static void __Pyx_CppExn2PyErr() {
-  // Catch a handful of different errors here and turn them into the
-  // equivalent Python errors.
-  try {
-    if (PyErr_Occurred())
-      ; // let the latest Python exn pass through and ignore the current one
-    else
-      throw;
-  } catch (const std::bad_alloc& exn) {
-    PyErr_SetString(PyExc_MemoryError, exn.what());
-  } catch (const std::bad_cast& exn) {
-    PyErr_SetString(PyExc_TypeError, exn.what());
-  } catch (const std::domain_error& exn) {
-    PyErr_SetString(PyExc_ValueError, exn.what());
-  } catch (const std::invalid_argument& exn) {
-    PyErr_SetString(PyExc_ValueError, exn.what());
-  } catch (const std::ios_base::failure& exn) {
-    // Unfortunately, in standard C++ we have no way of distinguishing EOF
-    // from other errors here; be careful with the exception mask
-    PyErr_SetString(PyExc_IOError, exn.what());
-  } catch (const std::out_of_range& exn) {
-    // Change out_of_range to IndexError
-    PyErr_SetString(PyExc_IndexError, exn.what());
-  } catch (const std::overflow_error& exn) {
-    PyErr_SetString(PyExc_OverflowError, exn.what());
-  } catch (const std::range_error& exn) {
-    PyErr_SetString(PyExc_ArithmeticError, exn.what());
-  } catch (const std::underflow_error& exn) {
-    PyErr_SetString(PyExc_ArithmeticError, exn.what());
-  } catch (const std::exception& exn) {
-    PyErr_SetString(PyExc_RuntimeError, exn.what());
-  }
-  catch (...)
-  {
-    PyErr_SetString(PyExc_RuntimeError, "Unknown exception");
-  }
-}
-#endif
-""",
-impl = ""
-)
-
 pyerr_occurred_withgil_utility_code= UtilityCode(
 proto = """
 static CYTHON_INLINE int __Pyx_ErrOccurredWithGIL(void); /* proto */
@@ -9823,195 +9950,6 @@ static void __Pyx_RaiseUnboundMemoryviewSliceNogil(const char *varname) {
 }
 """,
 requires = [raise_unbound_local_error_utility_code])
-
-#------------------------------------------------------------------------------------
-
-getitem_int_pyunicode_utility_code = UtilityCode(
-proto = '''
-#define __Pyx_GetItemInt_Unicode(o, i, size, to_py_func) (((size) <= sizeof(Py_ssize_t)) ? \\
-                                               __Pyx_GetItemInt_Unicode_Fast(o, i) : \\
-                                               __Pyx_GetItemInt_Unicode_Generic(o, to_py_func(i)))
-
-static CYTHON_INLINE Py_UCS4 __Pyx_GetItemInt_Unicode_Fast(PyObject* ustring, Py_ssize_t i) {
-    Py_ssize_t length;
-#if CYTHON_PEP393_ENABLED
-    if (unlikely(__Pyx_PyUnicode_READY(ustring) < 0)) return (Py_UCS4)-1;
-#endif
-    length = __Pyx_PyUnicode_GET_LENGTH(ustring);
-    if (likely((0 <= i) & (i < length))) {
-        return __Pyx_PyUnicode_READ_CHAR(ustring, i);
-    } else if ((-length <= i) & (i < 0)) {
-        return __Pyx_PyUnicode_READ_CHAR(ustring, i + length);
-    } else {
-        PyErr_SetString(PyExc_IndexError, "string index out of range");
-        return (Py_UCS4)-1;
-    }
-}
-
-static CYTHON_INLINE Py_UCS4 __Pyx_GetItemInt_Unicode_Generic(PyObject* ustring, PyObject* j) {
-    Py_UCS4 uchar;
-    PyObject *uchar_string;
-    if (!j) return (Py_UCS4)-1;
-    uchar_string = PyObject_GetItem(ustring, j);
-    Py_DECREF(j);
-    if (!uchar_string) return (Py_UCS4)-1;
-#if CYTHON_PEP393_ENABLED
-    if (unlikely(__Pyx_PyUnicode_READY(uchar_string) < 0)) {
-        Py_DECREF(uchar_string);
-        return (Py_UCS4)-1;
-    }
-#endif
-    uchar = __Pyx_PyUnicode_READ_CHAR(uchar_string, 0);
-    Py_DECREF(uchar_string);
-    return uchar;
-}
-''')
-
-getitem_int_utility_code = UtilityCode(
-proto = """
-
-static CYTHON_INLINE PyObject *__Pyx_GetItemInt_Generic(PyObject *o, PyObject* j) {
-    PyObject *r;
-    if (!j) return NULL;
-    r = PyObject_GetItem(o, j);
-    Py_DECREF(j);
-    return r;
-}
-
-""" + ''.join([
-"""
-#define __Pyx_GetItemInt_%(type)s(o, i, size, to_py_func) (((size) <= sizeof(Py_ssize_t)) ? \\
-                                                    __Pyx_GetItemInt_%(type)s_Fast(o, i) : \\
-                                                    __Pyx_GetItemInt_Generic(o, to_py_func(i)))
-
-static CYTHON_INLINE PyObject *__Pyx_GetItemInt_%(type)s_Fast(PyObject *o, Py_ssize_t i) {
-#if CYTHON_COMPILING_IN_CPYTHON
-    if (likely((0 <= i) & (i < Py%(type)s_GET_SIZE(o)))) {
-        PyObject *r = Py%(type)s_GET_ITEM(o, i);
-        Py_INCREF(r);
-        return r;
-    }
-    else if ((-Py%(type)s_GET_SIZE(o) <= i) & (i < 0)) {
-        PyObject *r = Py%(type)s_GET_ITEM(o, Py%(type)s_GET_SIZE(o) + i);
-        Py_INCREF(r);
-        return r;
-    }
-    return __Pyx_GetItemInt_Generic(o, PyInt_FromSsize_t(i));
-#else
-    return PySequence_GetItem(o, i);
-#endif
-}
-""" % {'type' : type_name} for type_name in ('List', 'Tuple')
-]) + """
-
-#define __Pyx_GetItemInt(o, i, size, to_py_func) (((size) <= sizeof(Py_ssize_t)) ? \\
-                                                    __Pyx_GetItemInt_Fast(o, i) : \\
-                                                    __Pyx_GetItemInt_Generic(o, to_py_func(i)))
-
-static CYTHON_INLINE PyObject *__Pyx_GetItemInt_Fast(PyObject *o, Py_ssize_t i) {
-#if CYTHON_COMPILING_IN_CPYTHON
-    if (PyList_CheckExact(o)) {
-        Py_ssize_t n = (likely(i >= 0)) ? i : i + PyList_GET_SIZE(o);
-        if (likely((n >= 0) & (n < PyList_GET_SIZE(o)))) {
-            PyObject *r = PyList_GET_ITEM(o, n);
-            Py_INCREF(r);
-            return r;
-        }
-    }
-    else if (PyTuple_CheckExact(o)) {
-        Py_ssize_t n = (likely(i >= 0)) ? i : i + PyTuple_GET_SIZE(o);
-        if (likely((n >= 0) & (n < PyTuple_GET_SIZE(o)))) {
-            PyObject *r = PyTuple_GET_ITEM(o, n);
-            Py_INCREF(r);
-            return r;
-        }
-    }
-    else if (likely(i >= 0)) {
-        PySequenceMethods *m = Py_TYPE(o)->tp_as_sequence;
-        if (likely(m && m->sq_item)) {
-            return m->sq_item(o, i);
-        }
-    }
-#else
-    if (PySequence_Check(o)) {
-        return PySequence_GetItem(o, i);
-    }
-#endif
-    return __Pyx_GetItemInt_Generic(o, PyInt_FromSsize_t(i));
-}
-""")
-
-
-
-#------------------------------------------------------------------------------------
-
-setitem_int_utility_code = UtilityCode(
-proto = """
-#define __Pyx_SetItemInt(o, i, v, size, to_py_func) (((size) <= sizeof(Py_ssize_t)) ? \\
-                                                    __Pyx_SetItemInt_Fast(o, i, v) : \\
-                                                    __Pyx_SetItemInt_Generic(o, to_py_func(i), v))
-
-static CYTHON_INLINE int __Pyx_SetItemInt_Generic(PyObject *o, PyObject *j, PyObject *v) {
-    int r;
-    if (!j) return -1;
-    r = PyObject_SetItem(o, j, v);
-    Py_DECREF(j);
-    return r;
-}
-
-static CYTHON_INLINE int __Pyx_SetItemInt_Fast(PyObject *o, Py_ssize_t i, PyObject *v) {
-#if CYTHON_COMPILING_IN_CPYTHON
-    if (PyList_CheckExact(o)) {
-        Py_ssize_t n = (likely(i >= 0)) ? i : i + PyList_GET_SIZE(o);
-        if (likely((n >= 0) & (n < PyList_GET_SIZE(o)))) {
-            PyObject* old = PyList_GET_ITEM(o, n);
-            Py_INCREF(v);
-            PyList_SET_ITEM(o, n, v);
-            Py_DECREF(old);
-            return 1;
-        }
-    } else
-#endif
-    if (likely(i >= 0)) {
-        PySequenceMethods *m = Py_TYPE(o)->tp_as_sequence;
-        if (likely(m && m->sq_ass_item)) {
-            return m->sq_ass_item(o, i, v);
-        }
-    }
-    return __Pyx_SetItemInt_Generic(o, PyInt_FromSsize_t(i), v);
-}
-""",
-impl = """
-""")
-
-#------------------------------------------------------------------------------------
-
-delitem_int_utility_code = UtilityCode(
-proto = """
-#define __Pyx_DelItemInt(o, i, size, to_py_func) (((size) <= sizeof(Py_ssize_t)) ? \\
-                                                    __Pyx_DelItemInt_Fast(o, i) : \\
-                                                    __Pyx_DelItem_Generic(o, to_py_func(i)))
-
-static CYTHON_INLINE int __Pyx_DelItem_Generic(PyObject *o, PyObject *j) {
-    int r;
-    if (!j) return -1;
-    r = PyObject_DelItem(o, j);
-    Py_DECREF(j);
-    return r;
-}
-
-static CYTHON_INLINE int __Pyx_DelItemInt_Fast(PyObject *o, Py_ssize_t i) {
-    if (likely(i >= 0)) {
-        PySequenceMethods *m = Py_TYPE(o)->tp_as_sequence;
-        if (likely(m && m->sq_ass_item)) {
-            return m->sq_ass_item(o, i, (PyObject *)NULL);
-        }
-    }
-    return __Pyx_DelItem_Generic(o, PyInt_FromSsize_t(i));
-}
-""",
-impl = """
-""")
 
 #------------------------------------------------------------------------------------
 
@@ -10094,12 +10032,19 @@ static int __Pyx_cdivision_warning(const char *, int); /* proto */
 """,
 impl="""
 static int __Pyx_cdivision_warning(const char *filename, int lineno) {
+#if CYTHON_COMPILING_IN_PYPY
+    filename++; // avoid compiler warnings
+    lineno++;
+    return PyErr_Warn(PyExc_RuntimeWarning,
+                     "division with oppositely signed operands, C and Python semantics differ");
+#else
     return PyErr_WarnExplicit(PyExc_RuntimeWarning,
                               "division with oppositely signed operands, C and Python semantics differ",
                               filename,
                               lineno,
                               __Pyx_MODULE_NAME,
                               NULL);
+#endif
 }
 """)
 
@@ -10109,21 +10054,3 @@ proto="""
 #define UNARY_NEG_WOULD_OVERFLOW(x)    \
         (((x) < 0) & ((unsigned long)(x) == 0-(unsigned long)(x)))
 """)
-
-binding_cfunc_utility_code = TempitaUtilityCode.load(
-    "CythonFunction", context=vars(Naming))
-fused_function_utility_code = TempitaUtilityCode.load(
-        "FusedFunction",
-        "CythonFunction.c",
-        context=vars(Naming),
-        requires=[binding_cfunc_utility_code])
-cyfunction_class_cell_utility_code = UtilityCode.load(
-    "CyFunctionClassCell",
-    "CythonFunction.c",
-    requires=[binding_cfunc_utility_code])
-
-generator_utility_code = UtilityCode.load(
-    "Generator",
-    "Generator.c",
-    requires=[Nodes.raise_utility_code, Nodes.swap_exception_utility_code],
-)

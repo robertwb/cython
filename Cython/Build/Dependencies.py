@@ -1,11 +1,16 @@
-# cython: profile=True
-
 import cython
 from Cython import __version__
 
 from glob import glob
 import re, os, sys
-import gzip
+try:
+    import gzip
+    gzip_open = gzip.open
+    gzip_ext = '.gz'
+except ImportError:
+    gzip_open = open
+    gzip_ext = ''
+import shutil
 import subprocess
 
 try:
@@ -20,7 +25,7 @@ from Cython import Utils
 from Cython.Utils import cached_function, cached_method, path_exists
 from Cython.Compiler.Main import Context, CompilationOptions, default_options
     
-os.path.join = cached_function(os.path.join)
+join_path = cached_function(os.path.join)
 
 if sys.version_info[0] < 3:
     # stupid Py2 distutils enforces str type in list of sources
@@ -42,11 +47,11 @@ def extended_iglob(pattern):
         if first == '':
             first = '.'
         for root in glob(first + "/"):
-            for path in extended_iglob(os.path.join(root, rest)):
+            for path in extended_iglob(join_path(root, rest)):
                 if path not in seen:
                     seen.add(path)
                     yield path
-            for path in extended_iglob(os.path.join(root, '*', '**', rest)):
+            for path in extended_iglob(join_path(root, '*', '**', rest)):
                 if path not in seen:
                     seen.add(path)
                     yield path
@@ -283,7 +288,7 @@ def normalize_existing(base_path, rel_paths):
 def normalize_existing0(base_dir, rel_paths):
     filtered = []
     for rel in rel_paths:
-        path = os.path.join(base_dir, rel)
+        path = join_path(base_dir, rel)
         if os.path.exists(path):
             filtered.append(os.path.normpath(path))
     return filtered
@@ -331,30 +336,32 @@ class DependencyTree(object):
     @cached_method
     def included_files(self, filename):
         # This is messy because included files are textually included, resolving
-        # cimports (and other includes) relative to the including file.
+        # cimports (but not includes) relative to the including file.
         all = set()
         for include in self.parse_dependencies(filename)[1]:
-            include_path = os.path.join(os.path.dirname(filename), include)
+            include_path = join_path(os.path.dirname(filename), include)
             if not path_exists(include_path):
                 include_path = self.context.find_include_file(include, None)
             if include_path:
                 if '.' + os.path.sep in include_path:
                     include_path = os.path.normpath(include_path)
                 all.add(include_path)
+                all.update(self.included_files(include_path))
             else:
                 print("Unable to locate '%s' referenced from '%s'" % (filename, include))
         return all
     
     @cached_method
     def cimports_and_externs(self, filename):
+        # This is really ugly. Nested cimports are resolved with respect to the
+        # includer, but includes are resolved with respect to the includee.
         cimports, includes, externs = self.parse_dependencies(filename)[:3]
         cimports = set(cimports)
         externs = set(externs)
         for include in self.included_files(filename):
-            # include file recursion resolved by self.included_files(source_filename)
-            deps = self.parse_dependencies(filename)
-            cimports.update(deps[0])
-            externs.update(deps[2])
+            included_cimports, included_externs = self.cimports_and_externs(include)
+            cimports.update(included_cimports)
+            externs.update(included_externs)
         return tuple(cimports), normalize_existing(filename, externs)
 
     def cimports(self, filename):
@@ -363,7 +370,7 @@ class DependencyTree(object):
     @cached_method
     def package(self, filename):
         dir = os.path.dirname(os.path.abspath(str(filename)))
-        if dir != filename and path_exists(os.path.join(dir, '__init__.py')):
+        if dir != filename and path_exists(join_path(dir, '__init__.py')):
             return self.package(dir) + (os.path.basename(dir),)
         else:
             return ()
@@ -391,7 +398,7 @@ class DependencyTree(object):
         else:
             pxd_list = []
         for module in self.cimports(filename):
-            if module[:7] == 'cython.':
+            if module[:7] == 'cython.' or module == 'cython':
                 continue
             pxd_file = self.find_pxd(module, filename)
             if pxd_file is None:
@@ -611,6 +618,9 @@ def cythonize(module_list, exclude=[], nthreads=0, aliases=None, quiet=False, fo
             else:
                 new_sources.append(source)
         m.sources = new_sources
+    if hasattr(options, 'cache'):
+        if not os.path.exists(options.cache):
+            os.mkdir(options.cache)
     to_compile.sort()
     if nthreads:
         # Requires multiprocessing (or Python >= 2.6)
@@ -642,13 +652,21 @@ def cythonize_one(pyx_file, c_file, fingerprint, quiet, options=None):
                     raise
         # Cython-generated c files are highly compressible.
         # (E.g. a compression ratio of about 10 for Sage).
-        fingerprint_file = os.path.join(
-            options.cache, fingerprint + '-' + os.path.basename(c_file) + '.gz')
+        fingerprint_file = join_path(
+            options.cache, "%s-%s%s" % (os.path.basename(c_file), fingerprint, gzip_ext))
         if os.path.exists(fingerprint_file):
             if not quiet:
                 print("Found compiled %s in cache" % pyx_file)
             os.utime(fingerprint_file, None)
-            open(c_file, 'wb').write(gzip.open(fingerprint_file).read())
+            g = gzip_open(fingerprint_file, 'rb')
+            try:
+                f = open(c_file, 'wb')
+                try:
+                    shutil.copyfileobj(g, f)
+                finally:
+                    f.close()
+            finally:
+                g.close()
             return
     if not quiet:
         print("Cythonizing %s" % pyx_file)
@@ -667,7 +685,15 @@ def cythonize_one(pyx_file, c_file, fingerprint, quiet, options=None):
     if any_failures:
         raise CompileError(None, pyx_file)
     if fingerprint:
-        gzip.open(fingerprint_file, 'wb').write(open(c_file).read())
+        f = open(c_file, 'rb')
+        try:
+            g = gzip_open(fingerprint_file, 'wb')
+            try:
+                shutil.copyfileobj(f, g)
+            finally:
+                g.close()
+        finally:
+            f.close()
 
 def cythonize_one_helper(m):
     return cythonize_one(*m[1:])
@@ -685,7 +711,7 @@ def cleanup_cache(cache, target_size, ratio=.85):
     total_size = 0
     all = []
     for file in os.listdir(cache):
-        path = os.path.join(cache, file)
+        path = join_path(cache, file)
         s = os.stat(path)
         total_size += s.st_size
         all.append((s.st_atime, s.st_size, path))
