@@ -19,6 +19,11 @@
 import sys
 import gcc
 import re
+import os
+
+# work around for having python.so outside of your working dir
+# otherwise these next imports fail
+sys.path.append (os.getcwd ())
 
 from pycpp import PyCppParser
 from config import output, headers

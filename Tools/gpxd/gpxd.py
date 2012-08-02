@@ -55,7 +55,7 @@ def run_gcc_pxd ():
     cmd = ('gcc -fplugin=%(plugin_path)s -fplugin-arg-python-script=\"./gccpxd.py\" -O0 -c %(gen_path)s' % \
                { "plugin_path" : gccpython, "gen_path" :__GEN_FILE } )
     debug ("executing <%s>" % cmd)
-    pipe = Popen(cmd, shell=True, stdout=PIPE)
+    pipe = Popen(cmd, shell=True)
     if pipe.wait () != 0:
         fatal ("There were some errors running gcc")
 
