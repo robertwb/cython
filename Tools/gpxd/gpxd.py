@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 # -*- coding: utf-8 -*-
 #
 # Copyright (C) 2012 Cython Project
@@ -16,6 +18,7 @@
 
 # Author Philip Herron <redbrain@gcc.gnu.org>
 
+from gccpxd import config
 from config import gccpython, output, headers, \
     keep_generated_files, compiler, lang, debug
 from subprocess import Popen, PIPE
@@ -46,16 +49,19 @@ def generate_source_file ():
     return fd
 
 def run_gcc_pxd ():
-    cmd = 'gcc --version'
-    debug ("executing <%s>" % cmd)
-    pipe = Popen(cmd, shell=True)
-    if pipe.wait () != 0:
-        fatal ("There were some errors running gcc")
+    if debug:
+        cmd = ('%(compiler)s --version' % { "compiler": compiler })
+        debug ("executing <%s>" % cmd)
+        pipe = Popen (cmd, shell = True)
+        if pipe.wait () != 0:
+            fatal ("There were some errors running gcc")
     # now to run the tool
-    cmd = ('gcc -fplugin=%(plugin_path)s -fplugin-arg-python-script=\"./gccpxd.py\" -O0 -c %(gen_path)s' % \
-               { "plugin_path" : gccpython, "gen_path" :__GEN_FILE } )
+    cmd = (('%(compiler)s -fplugin=%(plugin_path)s -fplugin-arg-python-script=\"' \
+                + './gccpxd/gccpxd.py\" -O0 -c %(gen_path)s') % \
+               { "compiler": compiler, "plugin_path" : gccpython, "gen_path" \
+                     :__GEN_FILE })
     debug ("executing <%s>" % cmd)
-    pipe = Popen(cmd, shell=True)
+    pipe = Popen (cmd, shell = True)
     if pipe.wait () != 0:
         fatal ("There were some errors running gcc")
 

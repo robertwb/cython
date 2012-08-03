@@ -16,22 +16,15 @@
 
 # Author Philip Herron <redbrain@gcc.gnu.org>
 
-import sys
+import sys, os, re
 import gcc
-import re
-import os
 
 # work around for having python.so outside of your working dir
 # otherwise these next imports fail
-sys.path.append (os.getcwd ())
+sys.path.append (os.getcwd ()  + "/gccpxd")
 
-from pycpp import PyCppParser
+from gpycpp import PyCppParser
 from config import output, headers
-
-# Hook for GCC 4.7 and later:
-if not hasattr(gcc, 'PLUGIN_FINISH_DECL'):
-    print "gpxd requires GCC >= 4.7"
-    sys.exit (0)
 
 function_decls = []
 block_decls = []
@@ -141,7 +134,6 @@ def gpxd_on_pass_execution(p, fn):
 def on_finish_decl(*args):
     global global_decls
     global_decls = args
-    # print args
     decl = args[0]
     if isinstance (decl, gcc.FunctionDecl):
         function_decls.append (decl)
