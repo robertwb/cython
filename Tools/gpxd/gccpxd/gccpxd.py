@@ -33,11 +33,17 @@ sanity_check = [False, False, False, False]
 enum_counter = 0
 
 def gpxd_generate_function (fd, decl):
-    fmt = "%s" % decl.type
-    ident = '%s' % decl
-    if re.search ("<.*>", fmt):
-        func = re.sub ("<.*>", ident, fmt)
-        fd.write ('\t%s\n' % func)
+    fd.write ("\t%(retype)s %(ident)s" % \
+                  { "retype": decl.type.type, "ident": decl.name})
+    fd.write ("(")
+    if len (decl.type.argument_types) > 0:
+        count = 0
+        for i in decl.type.argument_types:
+            fd.write ("%s" % i)
+            if count < (len (decl.type.argument_types) - 1):
+                fd.write (", ")
+            count = count + 1
+    fd.write (")\n")
 
 def gpxd_generate_type (fd, decl):
     global enum_counter
