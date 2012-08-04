@@ -54,6 +54,8 @@ def gpxd_generate_type (fd, decl):
         if ident == "None":
             ident = "<unamed>"
         fd.write ("\tctypedef struct %s:\n" % ident)
+        if len (decl.type.fields) == 0:
+            fd.write  ("\t\tpass\n")
         for f in decl.type.fields:
             if ('%s' % type (f.type)) == "<type 'gcc.UnionType'>":
                 uid = '%s' % f

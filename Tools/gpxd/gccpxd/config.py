@@ -2,7 +2,7 @@
 
 output = "test.pxd" # output file name/location
 
-headers = [ "/usr/include/gmp-i386.h" ] # full path headers to work on
+headers = [ "queue.h" ] # full path headers to work on
 
 blacklist = [ ]
 # add headers that you dont care about here if a header requires other headers
