@@ -41,10 +41,18 @@ def gpxd_generate_function (fd, decl):
 
 def gpxd_generate_type (fd, decl):
     global enum_counter
-    # print "%s" % type (decl.type)
-    if ('%s' % type (decl.type)) == "<type 'gcc.RecordType'>":
+    if ('%s' % type (decl.type)) == "<type 'gcc.IntegerType'>":
         ident = '%s' % decl
-        print ident
+        fd.write ("\tctypedef int %s\n" % ident)
+    elif ('%s' % type (decl.type)) == "<type 'gcc.PointerType'>":
+        fd.write ("\tctypedef %(ptr)s %(ident)s\n" % \
+                      { "ptr" : decl.pointer.dereference, \
+                        "ident" : decl.name })
+    # we need to add in all the other possible types here... 
+    elif ('%s' % type (decl.type)) == "<type 'gcc.RecordType'>":
+        ident = "%s" % decl.type.name
+        if ident == "None":
+            ident = "<unamed>"
         fd.write ("\tctypedef struct %s:\n" % ident)
         for f in decl.type.fields:
             if ('%s' % type (f.type)) == "<type 'gcc.UnionType'>":
@@ -54,6 +62,7 @@ def gpxd_generate_type (fd, decl):
                     fd.write ("\t\t\t%s %s\n" % (x.type, x.name))
             else:
                 fd.write ("\t\t%s %s\n" % (f.type, f.name))
+        fd.write ("\n")
     elif ('%s' % type (decl.type)) == "<type 'gcc.EnumeralType'>":
         ident = '%s' % decl
         if 'struct' in ident:
