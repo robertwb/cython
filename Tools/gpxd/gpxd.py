@@ -19,13 +19,11 @@
 # Author Philip Herron <redbrain@gcc.gnu.org>
 
 from gccpxd import config
-from config import gccpython, output, headers, \
-    keep_generated_files, compiler, lang, debug
 from subprocess import Popen, PIPE
-import sys
+import sys, os
 
 def debug (msg):
-    if debug:
+    if config.debug:
         print "DEBUG: %s" % msg
 
 def fatal (msg):
@@ -33,16 +31,16 @@ def fatal (msg):
     sys.exit (1)
 
 __GEN_FILE = None
-if lang == "c":
+if config.lang == "c":
     __GEN_FILE = "__gpxd.c"
-elif lang == "c++":
+elif config.lang == "c++":
     __GEN_FILE = "__gpxd.cc"
 else:
     fatal ("Invalid language selection")
 
 def generate_source_file ():
     fd = open (__GEN_FILE ,'w')
-    for i in headers:
+    for i in config.headers:
         data = ("#include \"%s\"\n" % i)
         fd.write (data)
     fd.write ("\nint main (void) { return 0; }\n")
@@ -50,7 +48,7 @@ def generate_source_file ():
 
 def run_gcc_pxd ():
     if debug:
-        cmd = ('%(compiler)s --version' % { "compiler": compiler })
+        cmd = ('%(compiler)s --version' % { "compiler": config.compiler })
         debug ("executing <%s>" % cmd)
         pipe = Popen (cmd, shell = True)
         if pipe.wait () != 0:
@@ -58,8 +56,8 @@ def run_gcc_pxd ():
     # now to run the tool
     cmd = (('%(compiler)s -fplugin=%(plugin_path)s -fplugin-arg-python-script=\"' \
                 + './gccpxd/gccpxd.py\" -O0 -c %(gen_path)s') % \
-               { "compiler": compiler, "plugin_path" : gccpython, "gen_path" \
-                     :__GEN_FILE })
+               { "compiler": config.compiler, "plugin_path" : config.gccpython, \
+                     "gen_path" : __GEN_FILE })
     debug ("executing <%s>" % cmd)
     pipe = Popen (cmd, shell = True)
     if pipe.wait () != 0:
@@ -70,8 +68,10 @@ def main ():
     assert fd
     fd.close ()
     run_gcc_pxd ()
-    if not keep_generated_files:
-        pass # delete the file 
+    if not config.keep_generated_files:
+        debug ("removing generated file <%(f)s>" % { "f": __GEN_FILE })
+        os.remove (__GEN_FILE)
+        # also need to delete the object file generated from gcc
 
 if __name__== "__main__":
     main ()

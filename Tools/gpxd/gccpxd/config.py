@@ -2,7 +2,13 @@
 
 output = "test.pxd" # output file name/location
 
-headers = [ "t.h" ] # full path headers to work on
+headers = [ "/usr/include/gmp-i386.h" ] # full path headers to work on
+
+blacklist = [ ]
+# add headers that you dont care about here if a header requires other headers
+# but you dont want pxd for those headers such as needing stdio.h you will
+# add that to your headers but also add that to the blacklist so you dont
+# generate code for that as well
 
 gccpython = "/home/redbrain/workspace/gcc-python-plugin/python.so"
 # location of python.so can be found via: gcc --print-file-name=plugin
