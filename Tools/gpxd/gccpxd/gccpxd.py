@@ -32,14 +32,30 @@ global_decls = None
 sanity_check = [False, False, False, False]
 enum_counter = 0
 
+def gpxd_cleanup_function_params (decl):
+     s = ''
+     parm = '%s' % decl
+     if 'struct' in parm:
+         x = False
+         for i in parm:
+             if x == True:
+                 s = s + i
+             if i == ' ':
+                 x = True
+     else:
+         s = parm
+     return s
+
 def gpxd_generate_function (fd, decl):
     fd.write ("\t%(retype)s %(ident)s" % \
-                  { "retype": decl.type.type, "ident": decl.name})
+                  { "retype": gpxd_cleanup_function_params \
+                        (decl.type.type), "ident": decl.name})
     fd.write ("(")
     if len (decl.type.argument_types) > 0:
         count = 0
         for i in decl.type.argument_types:
-            fd.write ("%s" % i)
+            s = gpxd_cleanup_function_params (i)
+            fd.write (s)
             if count < (len (decl.type.argument_types) - 1):
                 fd.write (", ")
             count = count + 1

@@ -1,6 +1,6 @@
 # Config parameters for the pxd generation tool
 
-output = "test.pxd" # output file name/location
+output = "cqueue.pxd" # output file name/location
 
 headers = [ "queue.h" ] # full path headers to work on
 
