@@ -61,8 +61,7 @@ def gpxd_generate_function (fd, decl):
             count = count + 1
     fd.write (")\n")
 
-def gpxd_generate_type (fd, decl):
-    global enum_counter
+def gpxd_generate_typedef_simple_types (fd, decl):
     if ('%s' % type (decl.type)) == "<type 'gcc.IntegerType'>":
         ident = '%s' % decl
         fd.write ("\tctypedef int %s\n" % ident)
@@ -71,7 +70,11 @@ def gpxd_generate_type (fd, decl):
                       { "ptr" : decl.pointer.dereference, \
                         "ident" : decl.name })
     # we need to add in all the other possible types here... 
-    elif ('%s' % type (decl.type)) == "<type 'gcc.RecordType'>":
+
+def gpxd_generate_type (fd, decl):
+    global enum_counter
+    gpxd_generate_typedef_simple_types (fd, decl)
+    if ('%s' % type (decl.type)) == "<type 'gcc.RecordType'>":
         ident = "%s" % decl.type.name
         if ident == "None":
             ident = "<unamed>"

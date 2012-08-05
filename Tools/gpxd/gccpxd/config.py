@@ -1,8 +1,11 @@
 # Config parameters for the pxd generation tool
 
-output = "cqueue.pxd" # output file name/location
+output = "libxml2.pxd" # output file name/location
 
-headers = [ "queue.h" ] # full path headers to work on
+headers = [ "libxml/parser.h" ]
+# full path headers to work on
+
+include_dir = [ "./libxml/" ]
 
 blacklist = [ ]
 # add headers that you dont care about here if a header requires other headers
