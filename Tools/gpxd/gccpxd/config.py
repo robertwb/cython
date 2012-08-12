@@ -1,11 +1,13 @@
 # Config parameters for the pxd generation tool
 
-output = "libxml2.pxd" # output file name/location
+output = "libxml.pxd" # output file name/location
 
-headers = [ "libxml/parser.h" ]
+headers = [ "include/libxml/xmlmemory.h",
+            "include/libxml/parser.h" ]
 # full path headers to work on
 
-include_dir = [ "./libxml/" ]
+include_dir = [ "/home/redbrain/workspace/cython/Tools/gpxd/include" ]
+# extra -I's for the compiler
 
 blacklist = [ ]
 # add headers that you dont care about here if a header requires other headers

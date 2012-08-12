@@ -32,148 +32,192 @@ global_decls = None
 sanity_check = [False, False, False, False]
 enum_counter = 0
 
+# cython doesnt understand struct and const so we simply remove this
 def gpxd_cleanup_function_params (decl):
-     s = ''
+     #print decl
+     t = ('%s' % decl)
      parm = '%s' % decl
-     if 'struct' in parm:
-         x = False
-         for i in parm:
-             if x == True:
-                 s = s + i
-             if i == ' ':
-                 x = True
+     s = ''
+     idx = parm.find ('struct')
+     idy = parm.find ('const')
+     if re.search ("\(\*.*\)", t):
+          if decl.name:
+               s = '%s' % decl.name
+          else:
+               print decl.name
+               print decl.type.type
+               print decl.type
+     elif idx > -1:
+          c = 0
+          y = False
+          for i in parm:
+               if y == True:
+                    if (c - len ('struct ')) == idx:
+                         y = False
+               if c == idx:
+                    y = True
+               elif y == False:
+                    s = s + i
+               c = c + 1
+     elif idy > -1:
+          c = 0
+          y = False
+          for i in parm:
+               if y == True:
+                    if (c - len ('const ')) == idy:
+                         y = False
+               if c == idy:
+                    y = True
+               elif y == False:
+                    s = s + i
+               c = c + 1
      else:
-         s = parm
+          s = parm
      return s
 
 def gpxd_generate_function (fd, decl):
-    fd.write ("\t%(retype)s %(ident)s" % \
+     fd.write ("\t%(retype)s %(ident)s (" % \
                   { "retype": gpxd_cleanup_function_params \
                         (decl.type.type), "ident": decl.name})
-    fd.write ("(")
-    if len (decl.type.argument_types) > 0:
-        count = 0
-        for i in decl.type.argument_types:
-            s = gpxd_cleanup_function_params (i)
-            fd.write (s)
-            if count < (len (decl.type.argument_types) - 1):
-                fd.write (", ")
-            count = count + 1
-    fd.write (")\n")
+     if len (decl.type.argument_types) > 0:
+          count = 0
+          for i in decl.type.argument_types:
+               s = gpxd_cleanup_function_params (i)
+               fd.write (s)
+               if count < (len (decl.type.argument_types) - 1):
+                    fd.write (", ")
+               count = count + 1
+     fd.write (")\n")
 
 def gpxd_generate_typedef_simple_types (fd, decl):
-    if ('%s' % type (decl.type)) == "<type 'gcc.IntegerType'>":
-        ident = '%s' % decl
-        fd.write ("\tctypedef int %s\n" % ident)
-    elif ('%s' % type (decl.type)) == "<type 'gcc.PointerType'>":
-        fd.write ("\tctypedef %(ptr)s %(ident)s\n" % \
-                      { "ptr" : decl.pointer.dereference, \
-                        "ident" : decl.name })
-    # we need to add in all the other possible types here... 
+     t = ('%s' % decl.type)
+     if re.search ("\(\*.*\)", t):
+          fd.write ("\tctypedef %(retype)s (*%(name)s) (" \
+                         % { "retype": decl.type.type.type, \
+                                  "name": decl.type.name})
+          if len (decl.type.type.argument_types):
+               count = 0
+               for i in decl.type.type.argument_types:
+                    s = gpxd_cleanup_function_params (i)
+                    fd.write (s)
+                    if count < (len (decl.type.type.argument_types) - 1):
+                         fd.write (", ")
+                    count = count + 1
+          fd.write (")\n")
+     elif ('%s' % type (decl.type)) == "<type 'gcc.IntegerType'>":
+          ident = '%s' % decl
+          fd.write ("\tctypedef int %s\n" % ident)
+     elif ('%s' % type (decl.type)) == "<type 'gcc.PointerType'>":
+          fd.write ("\tctypedef %(ptr)s %(ident)s\n" % \
+                         { "ptr" : decl.type, \
+                                "ident" : decl.name })
+     # we need to add in all the other possible types here... 
 
 def gpxd_generate_type (fd, decl):
-    global enum_counter
-    gpxd_generate_typedef_simple_types (fd, decl)
-    if ('%s' % type (decl.type)) == "<type 'gcc.RecordType'>":
-        ident = "%s" % decl.type.name
-        if ident == "None":
-            ident = "<unamed>"
-        fd.write ("\tctypedef struct %s:\n" % ident)
-        if len (decl.type.fields) == 0:
-            fd.write  ("\t\tpass\n")
-        for f in decl.type.fields:
-            if ('%s' % type (f.type)) == "<type 'gcc.UnionType'>":
-                uid = '%s' % f
-                fd.write ("\t\tcdef union %s:\n" % uid)
-                for x in f.type.fields:
-                    fd.write ("\t\t\t%s %s\n" % (x.type, x.name))
-            else:
-                fd.write ("\t\t%s %s\n" % (f.type, f.name))
-        fd.write ("\n")
-    elif ('%s' % type (decl.type)) == "<type 'gcc.EnumeralType'>":
-        ident = '%s' % decl
-        if 'struct' in ident:
-            enum_counter = 1
-            fd.write ('\tcdef enum %s:\n' % ident)
-        else:
-            fd.write ("\t\t%s = %i\n" % (ident, enum_counter))
-            enum_counter = enum_counter + 1
-    elif ('%s' % type (decl.type)) == "<type 'gcc.UnionType'>":
-        ident = '%s' % decl
-        if ident == "unionunion":
-            fd.write ("\tcdef union %s:\n" % ident)
-            for f in decl.type.fields:
-                fd.write ("\t\t%s %s\n" % (f.type, f.name))
+     global enum_counter
+     gpxd_generate_typedef_simple_types (fd, decl)
+     if ('%s' % type (decl.type)) == "<type 'gcc.RecordType'>":
+          ident = "%s" % decl.type.name
+          if ident == "None":
+               ident = "<unamed>"
+          fd.write ("\tctypedef struct %s:\n" % ident)
+          if len (decl.type.fields) == 0:
+               fd.write  ("\t\tpass\n")
+          for f in decl.type.fields:
+               if ('%s' % type (f.type)) == "<type 'gcc.UnionType'>":
+                    uid = '%s' % f
+                    fd.write ("\t\tcdef union %s:\n" % uid)
+                    for x in f.type.fields:
+                         fd.write ("\t\t\t%(type)s %(id)s\n" % { \
+                                   "type": gpxd_cleanup_function_params (f.type), "id":f.name })
+               else:
+                    fd.write ("\t\t%(type)s %(id)s\n" % { \
+                              "type": gpxd_cleanup_function_params (f.type), "id":f.name })
+          fd.write ("\n")
+     elif ('%s' % type (decl.type)) == "<type 'gcc.EnumeralType'>":
+          ident = '%s' % decl
+          if 'struct' in ident:
+               enum_counter = 1
+               fd.write ('\tcdef enum %s:\n' % ident)
+          else:
+               fd.write ("\t\t%s = %i\n" % (ident, enum_counter))
+               enum_counter = enum_counter + 1
+     elif ('%s' % type (decl.type)) == "<type 'gcc.UnionType'>":
+          ident = '%s' % decl
+          if ident == "unionunion":
+               fd.write ("\tcdef union %s:\n" % ident)
+               for f in decl.type.fields:
+                    fd.write ("\t\t%s %s\n" % (f.type, f.name))
 
 def gpxd_generate (fdecls, bdecls, out, headers):
-    header_dict = { }
-    for h in headers:
-        header_dict[h] = { 'FUNCTIONS':[], 'TYPES':[], 'MACROS':[] }
-        cpp = PyCppParser (h)
-        header_dict[h]['MACROS'] = cpp.parse_macros ()
-        cpp.parser_close ()
-        for i in fdecls:
-            loc = ('%r' % i.location)
-            if h in loc:
-                header_data = header_dict[h]
-                header_data['FUNCTIONS'].append (i)
-        for i in bdecls:
-            loc = ('%r' % i.location)
-            if h in loc:
-                header_data = header_dict[h]
-                header_data['TYPES'].append (i)
-    fd = open (out, 'w')
-    for i in header_dict:
-        fd.write ("cdef extern from \"%s\":\n" % i)
-        header_data = header_dict[i]
-        funcs = header_data['FUNCTIONS']
-        typesd = header_data['TYPES']
-        macros = header_data['MACROS']
-        for j in typesd:
-            gpxd_generate_type (fd, j)
-        fd.write ("\n")
-        for j in funcs:
-            gpxd_generate_function (fd, j)
-        fd.write ("\n")
-        if len (macros['DEFINE']) > 0:
-            fd.write ("\'\'\'\n")
-            for j in macros['DEFINE']:
-                fd.write (j)
-                fd.write ("\n")
-            fd.write ("\n\'\'\'\n")
-        fd.write ("\n")
-    fd.close ()
+     header_dict = { }
+     for h in headers:
+          header_dict[h] = { 'FUNCTIONS':[], 'TYPES':[], 'MACROS':[] }
+          cpp = PyCppParser (h)
+          header_dict[h]['MACROS'] = cpp.parse_macros ()
+          cpp.parser_close ()
+          for i in fdecls:
+               loc = ('%r' % i.location)
+               if h in loc:
+                    header_data = header_dict[h]
+                    header_data['FUNCTIONS'].append (i)
+          for i in bdecls:
+               loc = ('%r' % i.location)
+               if h in loc:
+                    header_data = header_dict[h]
+                    header_data['TYPES'].append (i)
+     fd = open (out, 'w')
+     for i in header_dict:
+          fd.write ("cdef extern from \"%s\":\n" % i)
+          header_data = header_dict[i]
+          funcs = header_data['FUNCTIONS']
+          typesd = header_data['TYPES']
+          macros = header_data['MACROS']
+          for j in typesd:
+               gpxd_generate_type (fd, j)
+               fd.write ("\n")
+          for j in funcs:
+               gpxd_generate_function (fd, j)
+          fd.write ("\n")
+          if len (macros['DEFINE']) > 0:
+               fd.write ("\'\'\'\n")
+               for j in macros['DEFINE']:
+                    fd.write (j)
+                    fd.write ("\n")
+               fd.write ("\n\'\'\'\n")
+          fd.write ("\n")
+     fd.close ()
     
 def gpxd_cleanup_decls (decls, hlist):
-    newdecls = []
-    for i in decls:
-        for h in hlist:
-            loc = ('%r' % i.location)
-            if loc.find (h) > -1:
-                newdecls.append (i)
-                break
-    return newdecls
+     newdecls = []
+     for i in decls:
+          for h in hlist:
+               loc = ('%r' % i.location)
+               if loc.find (h) > -1:
+                    newdecls.append (i)
+                    break
+     return newdecls
 
 def gpxd_on_pass_execution(p, fn):
-    global function_decls, block_decls, sanity_check
-    if p.name == '*free_lang_data':
-        if not sanity_check[0]:
-            for u in gcc.get_translation_units ():
-                for decl in u.block.vars:
-                    block_decls.append (decl)
-            sanity_check[0] = True
-    if sanity_check[0] and sanity_check[1] and not sanity_check[2]:
-        sanity_check[2] = True
-        block_decls = gpxd_cleanup_decls (block_decls, headers)
-        gpxd_generate (function_decls, block_decls, output, headers)
+     global function_decls, block_decls, sanity_check
+     if p.name == '*free_lang_data':
+          if not sanity_check[0]:
+               for u in gcc.get_translation_units ():
+                    for decl in u.block.vars:
+                         block_decls.append (decl)
+          sanity_check[0] = True
+     if sanity_check[0] and sanity_check[1] and not sanity_check[2]:
+          sanity_check[2] = True
+          block_decls = gpxd_cleanup_decls (block_decls, headers)
+          gpxd_generate (function_decls, block_decls, output, headers)
 
 def on_finish_decl(*args):
-    global global_decls
-    global_decls = args
-    decl = args[0]
-    if isinstance (decl, gcc.FunctionDecl):
-        function_decls.append (decl)
-    sanity_check[1] = True
+     global global_decls
+     global_decls = args
+     decl = args[0]
+     if isinstance (decl, gcc.FunctionDecl):
+          function_decls.append (decl)
+     sanity_check[1] = True
 
 gcc.register_callback(gcc.PLUGIN_PASS_EXECUTION, gpxd_on_pass_execution)
 
