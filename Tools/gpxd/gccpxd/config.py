@@ -1,12 +1,11 @@
 # Config parameters for the pxd generation tool
 
-output = "libxml.pxd" # output file name/location
+output = "test.pxd" # output file name/location
 
-headers = [ "include/libxml/xmlmemory.h",
-            "include/libxml/parser.h" ]
+headers = [ "t.h" ]
 # full path headers to work on
 
-include_dir = [ "/home/redbrain/workspace/cython/Tools/gpxd/include" ]
+include_dir = [ ]
 # extra -I's for the compiler
 
 blacklist = [ ]
@@ -21,8 +20,8 @@ gccpython = "/home/redbrain/workspace/gcc-python-plugin/python.so"
 
 keep_generated_files = False # keep the generated lang file
 
-compiler = "gcc" # Compiler to use
+compiler = "g++" # Compiler to use
 
-lang = "c" # language supported ones { "c", "c++" .... }
+lang = "c++" # language supported ones { "c", "c++" .... }
 
 debug = True # Verbose debuging information

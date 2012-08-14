@@ -29,6 +29,7 @@ from config import output, headers
 function_decls = []
 block_decls = []
 global_decls = None
+namespace_decls = []
 sanity_check = [False, False, False, False]
 enum_counter = 0
 
@@ -149,6 +150,21 @@ def gpxd_generate_type (fd, decl):
                for f in decl.type.fields:
                     fd.write ("\t\t%s %s\n" % (f.type, f.name))
 
+def gpxd_generate_cxx (fdecls, bdecls, namespaces, out, headers):
+     header_dict = { }
+     for h in headers:
+          header_dict[h] = { 'FUNCTIONS':[], 'TYPES':[], 'MACROS':[] }
+          cpp = PyCppParser (h)
+          header_dict[h]['MACROS'] = cpp.parse_macros ()
+          cpp.parser_close ()
+          for i in namespaces:
+               for x in i.declarations:
+                    print x
+          for i in bdecls:
+               print i
+          for i in fdecls:
+               print i
+
 def gpxd_generate (fdecls, bdecls, out, headers):
      header_dict = { }
      for h in headers:
@@ -198,18 +214,38 @@ def gpxd_cleanup_decls (decls, hlist):
                     break
      return newdecls
 
-def gpxd_on_pass_execution(p, fn):
-     global function_decls, block_decls, sanity_check
+def gpxd_on_pass_execution (p, fn):
+     global function_decls, block_decls, sanity_check, \
+         namespace_decls
      if p.name == '*free_lang_data':
           if not sanity_check[0]:
                for u in gcc.get_translation_units ():
-                    for decl in u.block.vars:
-                         block_decls.append (decl)
+                    if u.language == 'GNU C++':
+                         gns = gcc.get_global_namespace ()
+                         for x in gns.namespaces:
+                              namestr = '%s' % x.name
+                              if (namestr != 'std') and \
+                                       (namestr != '__cxxabiv1'):
+                                   namespace_decls.append (x)
+                    if u.block:
+                         for decl in u.block.vars:
+                              block_decls.append (decl)
+                    for i in gcc.get_variables ():
+                         found = False
+                         for x in block_decls:
+                              if i == x:
+                                   found = True
+                         if found == False:
+                              block_decls.append (i.decl)
           sanity_check[0] = True
      if sanity_check[0] and sanity_check[1] and not sanity_check[2]:
           sanity_check[2] = True
           block_decls = gpxd_cleanup_decls (block_decls, headers)
-          gpxd_generate (function_decls, block_decls, output, headers)
+          if u.language == 'GNU C++':
+               gpxd_generate_cxx (function_decls, block_decls, namespace_decls, \
+                                       output, headers)
+          else:
+               gpxd_generate (function_decls, block_decls, output, headers)
 
 def on_finish_decl(*args):
      global global_decls
