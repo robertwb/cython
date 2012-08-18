@@ -27,6 +27,7 @@ from gpycpp import PyCppParser
 from config import output, headers
 
 global_decls = []
+inter = []
 pregcc = False
 sanity_check = [False, False, False, False]
 enum_counter = 0
@@ -54,11 +55,11 @@ def gpxd_cleanup_function_params (decl):
           ns = ''
           first = True
           for c in s:
-               if first and not c.isalpha ():
-                    first = False
+               if c == ' ' and first:
                     continue
                else:
-                    ns = ns + c
+                    first = False
+               ns = ns + c
           s = ns
      else:
           s = parm
@@ -183,7 +184,9 @@ def gpxd_generate_type (fd, decl, indent):
          else:
               for i in range (indent):
                    fd.write ("\t")
-              fd.write ("cdef struct %(name)s:\n" % \
+              # were kind of forced to assume a typedef there is
+              # little to no information on typedefs here..
+              fd.write ("ctypedef %(name)s:\n" % \
                              { 'name': decl.type.name })
               if len (decl.type.fields) == 0:
                    for i in range (indent + 1):
@@ -266,7 +269,7 @@ def gpxd_generate_cxx (decls, out, headers):
      fd.close ()
 
 def gpxd_on_pass_execution (p, fn):
-     global language, global_decls
+     global language, global_decls, inter
      namespaces = []
      decls = []
      if p.name == '*free_lang_data':
@@ -293,6 +296,7 @@ def gpxd_on_pass_execution (p, fn):
                          for i in decls:
                               global_decls.append (i)
                     else:
+                         global_decl = inter
                          for decl in u.block.vars:
                               if pregcc:
                                    global_decls.append (decl)
@@ -312,7 +316,7 @@ def gpxd_on_pass_execution (p, fn):
 def on_finish_decl(*args):
      decl = args[0]
      if decl.is_builtin == False:
-          global_decls.append (decl)
+          inter.append (decl)
      sanity_check[1] = True
 
 gcc.register_callback(gcc.PLUGIN_PASS_EXECUTION, gpxd_on_pass_execution)
