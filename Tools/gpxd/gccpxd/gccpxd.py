@@ -296,17 +296,14 @@ def gpxd_on_pass_execution (p, fn):
                          for i in decls:
                               global_decls.append (i)
                     else:
-                         global_decl = inter
+                         global_decls = inter
                          for decl in u.block.vars:
-                              if pregcc:
+                              found = False
+                              for d in global_decls:
+                                   if decl == d:
+                                        found = True
+                              if not found:
                                    global_decls.append (decl)
-                              else:
-                                   found = False
-                                   for x in global_decls:
-                                        if x == decl:
-                                             found = True
-                                   if not found:
-                                        global_decls.append (decl)
                          sanity_check[1] = True
                sanity_check[0] = True
      if sanity_check[0] and sanity_check[1] and not sanity_check[2]:
@@ -324,5 +321,3 @@ gcc.register_callback(gcc.PLUGIN_PASS_EXECUTION, gpxd_on_pass_execution)
 # Hook for GCC 4.7 and later:
 if hasattr(gcc, 'PLUGIN_FINISH_DECL'):
     gcc.register_callback(gcc.PLUGIN_FINISH_DECL, on_finish_decl)
-else:
-     pregcc = True

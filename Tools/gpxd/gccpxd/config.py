@@ -2,7 +2,7 @@
 
 output = "test.pxd" # output file name/location
 
-headers = [ "t.h" ]
+headers = [ "queue.h" ]
 # full path headers to work on
 
 include_dir = [ ]
@@ -20,8 +20,8 @@ gccpython = "/home/redbrain/workspace/gcc-python-plugin/python.so"
 
 keep_generated_files = False # keep the generated lang file
 
-compiler = "g++" # Compiler to use
+compiler = "gcc" # Compiler to use
 
-lang = "c++" # language supported ones { "c", "c++" }
+lang = "c" # language supported ones { "c", "c++" }
 
 debug = True # Verbose debuging information
