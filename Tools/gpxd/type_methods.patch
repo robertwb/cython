@@ -1,0 +1,14 @@
+diff --git a/generate-tree-c.py b/generate-tree-c.py
+index cd2c393..9e50a39 100644
+--- a/generate-tree-c.py
++++ b/generate-tree-c.py
+@@ -453,6 +453,9 @@ def generate_tree_code_classes():
+             add_simple_getter('fields',
+                               'gcc_tree_list_from_chain(TYPE_FIELDS(self->t))',
+                               "The fields of this type")
++            add_simple_getter('methods',
++                              'gcc_tree_list_from_chain(TYPE_METHODS(self->t))',
++                              "The TYPE_METHODS")
+ 
+         if tree_type.SYM == 'IDENTIFIER_NODE':
+             add_simple_getter('name',
