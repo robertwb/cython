@@ -57,7 +57,7 @@ def run_gcc_pxd ():
     includes = ''
     for i in config.include_dir:
         includes = includes + ('-I%(inc)s' % { "inc": i })
-    cmd = (('%(compiler)s -v -fplugin=%(plugin_path)s -fplugin-arg-python-script=\"' \
+    cmd = (('%(compiler)s -fplugin=%(plugin_path)s -fplugin-arg-python-script=\"' \
                 + './gccpxd/gccpxd.py\" %(include_dirs)s -O0 -c %(gen_path)s') % \
                { "compiler": config.compiler, "plugin_path" : config.gccpython, \
                      "include_dirs" : includes , "gen_path" : __GEN_FILE })

@@ -15,3 +15,19 @@ QueueValue queue_pop_tail(Queue *queue);
 QueueValue queue_peek_tail(Queue *queue);
 
 int queue_is_empty(Queue *queue);
+
+union data
+{
+    char a;
+    int x;
+    float f;
+
+} myData;
+
+struct test {
+  int a;
+  union {
+    char * s;
+    float b;
+  } x;
+};
