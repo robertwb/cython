@@ -62,9 +62,13 @@
   #define PyErr_WarnEx(category, message, stacklevel) PyErr_Warn(category, message)
   #define __PYX_BUILD_PY_SSIZE_T "i"
 #else
-  #define __PYX_BUILD_PY_SSIZE_T "n"
-  #define CYTHON_FORMAT_SSIZE_T "z"
   #define __Pyx_PyIndex_Check PyIndex_Check
+  #define __PYX_BUILD_PY_SSIZE_T "n"
+  #if defined(WIN32) || defined(MS_WINDOWS)
+    #define CYTHON_FORMAT_SSIZE_T "I"
+  #else
+    #define CYTHON_FORMAT_SSIZE_T "z"
+  #endif
 #endif
 
 #if PY_VERSION_HEX < 0x02060000
