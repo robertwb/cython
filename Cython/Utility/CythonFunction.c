@@ -18,6 +18,29 @@
 #define __Pyx_CyFunction_SetDefaultsGetter(f, g) \
     ((__pyx_CyFunctionObject *) (f))->defaults_getter = (g)
 
+typedef struct {
+    char* signature;
+    void* callable;
+} __pyx_CyFunctionCallable;
+
+static CYTHON_INLINE __pyx_CyFunctionCallable __pyx_new_CyFunctionCallable(char* signature, void* ptr) {
+    __pyx_CyFunctionCallable res;
+    res.signature = signature;
+    res.callable = ptr;
+    return res;
+}
+
+static CYTHON_INLINE __pyx_CyFunctionCallable __pyx_uncallable_CyFunctionCallable() {
+    return __pyx_new_CyFunctionCallable("", NULL);
+}
+
+static CYTHON_INLINE void* __pyx_GetCallablePtr(__pyx_CyFunctionCallable callable, char* signature) {
+    if (strcmp(callable.signature, signature) == 0) {
+        return callable.callable;
+    } else {
+        return NULL;
+    }
+}
 
 typedef struct {
     PyCFunctionObject func;
@@ -41,18 +64,21 @@ typedef struct {
     PyObject *defaults_kwdict;  /* Const kwonly defaults dict */
     PyObject *(*defaults_getter)(PyObject *);
     PyObject *func_annotations; /* function annotations dict */
+    
+    __pyx_CyFunctionCallable cy_callable;
 } __pyx_CyFunctionObject;
 
 static PyTypeObject *__pyx_CyFunctionType = 0;
 
-#define __Pyx_CyFunction_NewEx(ml, flags, qualname, self, module, globals, code) \
-    __Pyx_CyFunction_New(__pyx_CyFunctionType, ml, flags, qualname, self, module, globals, code)
+#define __Pyx_CyFunction_NewEx(ml, flags, qualname, self, module, globals, code, cy_callable) \
+    __Pyx_CyFunction_New(__pyx_CyFunctionType, ml, flags, qualname, self, module, globals, code, cy_callable)
 
 static PyObject *__Pyx_CyFunction_New(PyTypeObject *, PyMethodDef *ml,
                                       int flags, PyObject* qualname,
                                       PyObject *self,
                                       PyObject *module, PyObject *globals,
-                                      PyObject* code);
+                                      PyObject* code,
+                                      __pyx_CyFunctionCallable cy_callable);
 
 static CYTHON_INLINE void *__Pyx_CyFunction_InitDefaults(PyObject *m,
                                                          size_t size,
@@ -424,7 +450,8 @@ static PyMethodDef __pyx_CyFunction_methods[] = {
 
 
 static PyObject *__Pyx_CyFunction_New(PyTypeObject *type, PyMethodDef *ml, int flags, PyObject* qualname,
-                                      PyObject *closure, PyObject *module, PyObject* globals, PyObject* code) {
+                                      PyObject *closure, PyObject *module, PyObject* globals, PyObject* code,
+                                      __pyx_CyFunctionCallable cy_callable) {
     __pyx_CyFunctionObject *op = PyObject_GC_New(__pyx_CyFunctionObject, type);
     if (op == NULL)
         return NULL;
@@ -453,6 +480,7 @@ static PyObject *__Pyx_CyFunction_New(PyTypeObject *type, PyMethodDef *ml, int f
     op->defaults_kwdict = NULL;
     op->defaults_getter = NULL;
     op->func_annotations = NULL;
+    op->cy_callable = cy_callable;
     PyObject_GC_Track(op);
     return (PyObject *) op;
 }
@@ -734,7 +762,7 @@ typedef struct {
     PyObject *self;
 } __pyx_FusedFunctionObject;
 
-#define __pyx_FusedFunction_NewEx(ml, flags, qualname, self, module, globals, code)         \
+#define __pyx_FusedFunction_NewEx(ml, flags, qualname, self, module, globals, code, cy_callable)    \
         __pyx_FusedFunction_New(__pyx_FusedFunctionType, ml, flags, qualname, self, module, globals, code)
 static PyObject *__pyx_FusedFunction_New(PyTypeObject *type,
                                          PyMethodDef *ml, int flags,
@@ -759,7 +787,8 @@ __pyx_FusedFunction_New(PyTypeObject *type, PyMethodDef *ml, int flags,
 {
     __pyx_FusedFunctionObject *fusedfunc =
         (__pyx_FusedFunctionObject *) __Pyx_CyFunction_New(type, ml, flags, qualname,
-                                                           self, module, globals, code);
+                                                           self, module, globals, code,
+                                                           __pyx_uncallable_CyFunctionCallable());
     if (!fusedfunc)
         return NULL;
 
@@ -811,7 +840,7 @@ __pyx_FusedFunction_descr_get(PyObject *self, PyObject *obj, PyObject *type)
     if (obj == Py_None)
         obj = NULL;
 
-    meth = (__pyx_FusedFunctionObject *) __pyx_FusedFunction_NewEx(
+    meth = (__pyx_FusedFunctionObject *) __pyx_FusedFunction_New(
                     ((PyCFunctionObject *) func)->m_ml,
                     ((__pyx_CyFunctionObject *) func)->flags,
                     ((__pyx_CyFunctionObject *) func)->func_qualname,
