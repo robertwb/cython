@@ -4671,12 +4671,35 @@ class SimpleCallNode(CallNode):
             arg_code = self.arg_tuple.py_result()
             code.globalstate.use_utility_code(UtilityCode.load_cached(
                 "PyObjectCall", "ObjectHandling.c"))
+            if self.arg_tuple.args is None:
+                c_sig = ""
+            else:
+                c_sig = PyrexTypes.signature_string(py_object_type, [arg.type for arg in self.arg_tuple.args])
+            if c_sig:
+                arg_decls = ", ".join(['PyObject*'] + [arg.type.declaration_code("") for arg in self.arg_tuple.args])
+                arg_values = ", ".join(['NULL'] + [str(arg.result()) for arg in self.arg_tuple.args])
+                code.putln('{')
+                code.putln('PyObject* (*c_ptr)(%s) = NULL;' % arg_decls)
+                code.putln('if (%s->ob_type == __pyx_CyFunctionType '
+                                '&& c_ptr == __pyx_GetCallablePtr(((__pyx_CyFunctionObject*) %s)->cy_callable, "%s")) {' % (
+                        self.function.py_result(),
+                        self.function.py_result(),
+                        c_sig))
+                code.putln(
+                    "%s = (*c_ptr)(%s); %s" % (
+                        self.result(),
+                        arg_values,
+                        code.error_goto_if_null(self.result(), self.pos)))
+                code.putln('} else {')
             code.putln(
                 "%s = __Pyx_PyObject_Call(%s, %s, NULL); %s" % (
                     self.result(),
                     self.function.py_result(),
                     arg_code,
                     code.error_goto_if_null(self.result(), self.pos)))
+            if c_sig:
+                code.putln('}')
+                code.putln('}')
             code.put_gotref(self.py_result())
         elif func_type.is_cfunction:
             if self.has_optional_args:
@@ -7486,6 +7509,14 @@ class PyCFunctionNode(ExprNode, ModuleNameMixin):
 
     gil_message = "Constructing Python function"
 
+    def pyfunc_signature_string(self):
+        if self.def_node.star_arg or self.def_node.starstar_arg:
+            return ""
+        else:
+            return PyrexTypes.signature_string(
+                PyrexTypes.py_object_type,
+                [arg.type for arg in self.def_node.args])
+
     def self_result_code(self):
         if self.self_object is None:
             self_result = "NULL"
@@ -7521,10 +7552,14 @@ class PyCFunctionNode(ExprNode, ModuleNameMixin):
             code.globalstate.use_utility_code(
                 UtilityCode.load_cached("FusedFunction", "CythonFunction.c"))
             constructor = "__pyx_FusedFunction_NewEx"
+            cy_callable = "__pyx_uncallable_CyFunctionCallable()"
         else:
             code.globalstate.use_utility_code(
                 UtilityCode.load_cached("CythonFunction", "CythonFunction.c"))
             constructor = "__Pyx_CyFunction_NewEx"
+            cy_callable = '__pyx_new_CyFunctionCallable("%s", &%s)' % (
+                                self.pyfunc_signature_string(),
+                                self.def_node.entry.pyfunc_cname)
 
         if self.code_object:
             code_object_result = self.code_object.py_result()
@@ -7556,7 +7591,7 @@ class PyCFunctionNode(ExprNode, ModuleNameMixin):
                 self.get_py_mod_name(code),
                 "PyModule_GetDict(%s)" % Naming.module_cname,
                 code_object_result,
-                "__pyx_uncallable_CyFunctionCallable()",
+                cy_callable,
                 code.error_goto_if_null(self.result(), self.pos)))
 
         code.put_gotref(self.py_result())

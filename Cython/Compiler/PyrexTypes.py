@@ -21,6 +21,9 @@ class BaseType(object):
     def cast_code(self, expr_code):
         return "((%s)%s)" % (self.declaration_code(""), expr_code)
 
+    def signature_code(self):
+        return short_signature_codes.get(self, self.declaration_code(""))
+
     def specialization_name(self):
         # This is not entirely robust.
         safe = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789'
@@ -2203,6 +2206,9 @@ class CPtrType(CPointerBaseType):
     is_ptr = 1
     default_value = "0"
 
+    def signature_code(self):
+        return self.base_type.signature_code() + '*'
+
     def __hash__(self):
         return hash(self.base_type) + 27 # arbitrarily chosen offset
 
@@ -3875,3 +3881,16 @@ def typecast(to_type, from_type, expr_code):
     else:
         #print "typecast: to", to_type, "from", from_type ###
         return to_type.cast_code(expr_code)
+
+short_signature_codes  = {
+    c_char_type: 'c',
+    c_int_type: 'i',
+    c_double_type: 'd',
+    py_object_type: 'O',
+}
+
+def signature_string(return_type, arg_types):
+    # TODO: Make more compact.
+    return "%s(%s)" % (
+        return_type.signature_code(),
+        ",".join(arg.signature_code() for arg in arg_types))
