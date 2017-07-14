@@ -176,7 +176,7 @@ _directive_defaults = {
     'unraisable_tracebacks': True,
     'old_style_globals': False,
     'np_pythran': False,
-    'fast_gil': False,
+    'fast_gil': True,
 
     # set __file__ and/or __path__ to known source/target path at import time (instead of not having them available)
     'set_initial_path' : None,  # SOURCEFILE or "/full/path/to/module"
